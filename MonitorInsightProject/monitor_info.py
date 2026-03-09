@@ -6,6 +6,7 @@ import math
 import os
 import re
 import sys
+import time
 from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,7 @@ APP_ID = "xyabc.monitor.insight"
 VCP_CODE_INPUT_SELECT = 0x60
 CCHDEVICENAME = 32
 PHYSICAL_MONITOR_DESCRIPTION_SIZE = 128
+CAPABILITIES_CACHE_TTL_SECONDS = 45.0
 
 INPUT_SOURCE_LABELS = {
     0x01: "VGA 1",
@@ -119,6 +121,16 @@ class InputSourceOption:
 
 
 @dataclass(slots=True)
+class CachedMonitorCapabilities:
+    physical_monitor_description: str
+    ddc_ci_supported: bool
+    supported_input_source_codes: tuple[int, ...]
+    input_switch_supported: bool
+    input_control_error: str
+    expires_at: float
+
+
+@dataclass(slots=True)
 class MonitorControlInfo:
     rect: tuple[int, int, int, int]
     gdi_device_name: str
@@ -184,6 +196,15 @@ class MonitorSnapshot:
         )
 
     @property
+    def native_monitor_rect(self) -> tuple[int, int, int, int]:
+        return (
+            int(round(self.position[0] * self.scale_factor)),
+            int(round(self.position[1] * self.scale_factor)),
+            int(round((self.position[0] + self.desktop_resolution[0]) * self.scale_factor)),
+            int(round((self.position[1] + self.desktop_resolution[1]) * self.scale_factor)),
+        )
+
+    @property
     def current_input_source_text(self) -> str:
         if self.current_input_source_code is None:
             return self.current_input_source_label or "未读取"
@@ -243,6 +264,9 @@ class MonitorSnapshot:
             "input_switch_supported": self.input_switch_supported,
             "input_control_error": self.input_control_error,
         }
+
+
+_CAPABILITIES_CACHE: dict[str, CachedMonitorCapabilities] = {}
 
 
 def set_windows_app_id() -> None:
@@ -312,6 +336,39 @@ def _format_windows_error(prefix: str) -> str:
     return f"{prefix} ({error}: {ctypes.FormatError(error).strip()})"
 
 
+def _monitor_cache_key(gdi_device_name: str, rect: tuple[int, int, int, int]) -> str:
+    device_name = gdi_device_name.strip() or "UNKNOWN"
+    return f"{device_name}:{rect[0]},{rect[1]},{rect[2]},{rect[3]}"
+
+
+def _get_cached_capabilities(cache_key: str) -> CachedMonitorCapabilities | None:
+    cached = _CAPABILITIES_CACHE.get(cache_key)
+    if cached is None:
+        return None
+    if cached.expires_at < time.monotonic():
+        _CAPABILITIES_CACHE.pop(cache_key, None)
+        return None
+    return cached
+
+
+def _store_cached_capabilities(
+    cache_key: str,
+    physical_monitor_description: str,
+    ddc_ci_supported: bool,
+    supported_input_source_codes: tuple[int, ...],
+    input_switch_supported: bool,
+    input_control_error: str,
+) -> None:
+    _CAPABILITIES_CACHE[cache_key] = CachedMonitorCapabilities(
+        physical_monitor_description=physical_monitor_description,
+        ddc_ci_supported=ddc_ci_supported,
+        supported_input_source_codes=supported_input_source_codes,
+        input_switch_supported=input_switch_supported,
+        input_control_error=input_control_error,
+        expires_at=time.monotonic() + CAPABILITIES_CACHE_TTL_SECONDS,
+    )
+
+
 def _read_capabilities_string(handle: wintypes.HANDLE) -> tuple[str, str]:
     length = wintypes.DWORD()
     if not dxva2.GetCapabilitiesStringLength(handle, ctypes.byref(length)):
@@ -358,6 +415,7 @@ def enumerate_monitor_control_infos() -> dict[tuple[int, int, int, int], Monitor
             int(info.rcMonitor.bottom),
         )
         gdi_device_name = info.szDevice.strip()
+        cache_key = _monitor_cache_key(gdi_device_name, rect)
 
         count = wintypes.DWORD()
         if not dxva2.GetNumberOfPhysicalMonitorsFromHMONITOR(hmonitor, ctypes.byref(count)):
@@ -402,21 +460,49 @@ def enumerate_monitor_control_infos() -> dict[tuple[int, int, int, int], Monitor
 
         try:
             primary_monitor = monitors[0]
-            capabilities_string, caps_error = _read_capabilities_string(primary_monitor.hPhysicalMonitor)
             current_code, current_error = _read_current_input_source_code(primary_monitor.hPhysicalMonitor)
+            cached = _get_cached_capabilities(cache_key)
+
+            if cached is not None:
+                supported_codes = list(cached.supported_input_source_codes)
+                if current_code is not None and current_code not in supported_codes:
+                    supported_codes.insert(0, current_code)
+                control_infos[rect] = MonitorControlInfo(
+                    rect=rect,
+                    gdi_device_name=gdi_device_name,
+                    physical_monitor_description=cached.physical_monitor_description,
+                    ddc_ci_supported=bool(cached.ddc_ci_supported or current_code is not None),
+                    current_input_source_code=current_code,
+                    supported_input_source_codes=tuple(supported_codes),
+                    input_switch_supported=cached.input_switch_supported,
+                    input_control_error=current_error or cached.input_control_error,
+                )
+                return True
+
+            capabilities_string, caps_error = _read_capabilities_string(primary_monitor.hPhysicalMonitor)
             supported_codes = list(parse_supported_input_source_codes(capabilities_string))
             if current_code is not None and current_code not in supported_codes:
                 supported_codes.insert(0, current_code)
             error_message = current_error or caps_error
             ddc_ci_supported = bool(capabilities_string or current_code is not None)
+            input_switch_supported = ddc_ci_supported and len(supported_codes) > 1
+            physical_monitor_description = primary_monitor.szPhysicalMonitorDescription.strip()
+            _store_cached_capabilities(
+                cache_key=cache_key,
+                physical_monitor_description=physical_monitor_description,
+                ddc_ci_supported=ddc_ci_supported,
+                supported_input_source_codes=tuple(supported_codes),
+                input_switch_supported=input_switch_supported,
+                input_control_error=caps_error,
+            )
             control_infos[rect] = MonitorControlInfo(
                 rect=rect,
                 gdi_device_name=gdi_device_name,
-                physical_monitor_description=primary_monitor.szPhysicalMonitorDescription.strip(),
+                physical_monitor_description=physical_monitor_description,
                 ddc_ci_supported=ddc_ci_supported,
                 current_input_source_code=current_code,
                 supported_input_source_codes=tuple(supported_codes),
-                input_switch_supported=ddc_ci_supported and len(supported_codes) > 1,
+                input_switch_supported=input_switch_supported,
                 input_control_error=error_message,
             )
         finally:
@@ -557,6 +643,7 @@ def switch_monitor_input_source(snapshot: MonitorSnapshot, input_source_code: in
         "message": "未找到对应的物理显示器",
     }
     target_rect = snapshot.monitor_rect
+    target_native_rect = snapshot.native_monitor_rect
     target_device = snapshot.gdi_device_name.strip()
 
     def callback(hmonitor, hdc, lprc, lparam):
@@ -572,9 +659,10 @@ def switch_monitor_input_source(snapshot: MonitorSnapshot, input_source_code: in
             int(info.rcMonitor.bottom),
         )
         device_name = info.szDevice.strip()
-        if rect != target_rect:
-            return True
-        if target_device and device_name and device_name != target_device:
+        if target_device:
+            if device_name != target_device:
+                return True
+        elif rect not in (target_rect, target_native_rect):
             return True
 
         state["matched"] = True
@@ -645,4 +733,3 @@ def save_snapshot_report(path: str | Path, snapshots: list[MonitorSnapshot]) -> 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(snapshots_to_json(snapshots), encoding="utf-8")
     return output_path
-

@@ -38,6 +38,10 @@ from monitor_info import (
     switch_monitor_input_source,
 )
 
+AUTO_REFRESH_INTERVAL_MS = 6000
+SIGNAL_SWITCH_REFRESH_DELAY_MS = 900
+SIGNAL_SWITCH_BUTTON_RESTORE_DELAY_MS = 1400
+
 STYLE_SHEET = """
 QMainWindow {
     background: #eef3f9;
@@ -133,6 +137,29 @@ QScrollArea {
 QStatusBar {
     background: transparent;
     color: #4f6176;
+}
+"""
+
+SWITCH_CONFIRM_DIALOG_STYLE = """
+QMessageBox {
+    background: #17324d;
+}
+QMessageBox QLabel {
+    color: white;
+    min-width: 360px;
+    font-size: 10.5pt;
+}
+QMessageBox QPushButton {
+    background: rgba(255, 255, 255, 0.14);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.24);
+    border-radius: 12px;
+    padding: 9px 18px;
+    min-width: 96px;
+    font-weight: 700;
+}
+QMessageBox QPushButton:hover {
+    background: rgba(255, 255, 255, 0.22);
 }
 """
 
@@ -395,7 +422,7 @@ class MonitorInfoWindow(QMainWindow):
         self.app.primaryScreenChanged.connect(lambda _screen: self.refresh_monitors(force=True))
 
         self.refresh_timer = QTimer(self)
-        self.refresh_timer.setInterval(2500)
+        self.refresh_timer.setInterval(AUTO_REFRESH_INTERVAL_MS)
         self.refresh_timer.timeout.connect(self.refresh_monitors)
         self.refresh_timer.start()
 
@@ -525,7 +552,7 @@ class MonitorInfoWindow(QMainWindow):
 
         if can_switch:
             self.signal_status.setText(
-                "当前显示器支持通过 DDC/CI 切换输入源。切换后显示器可能会短暂黑屏；如果目标端口没有信号，你需要手动切回。"
+                "当前显示器支持通过 DDC/CI 切换输入源。已减少多显示器下的刷新阻塞，切换后会做一次较快的状态同步。"
             )
         elif snapshot.current_input_source_code is not None:
             self.signal_status.setText(
@@ -546,6 +573,22 @@ class MonitorInfoWindow(QMainWindow):
         self.switch_signal_button.setEnabled(False)
         self.signal_status.setText("提示：需要显示器开启 DDC/CI，且显示器本身支持输入源控制，才可以读取并切换信号。")
 
+    def _confirm_signal_switch(self, snapshot: MonitorSnapshot, target_label: str) -> bool:
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("确认切换信号源")
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setText(
+            (
+                f"准备将 {snapshot.display_title} 切换到 {target_label}。\n\n"
+                "切换后显示器可能会暂时黑屏；如果该输入口没有有效信号，你需要手动切回原输入源。\n\n"
+                "是否继续？"
+            )
+        )
+        dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        dialog.setDefaultButton(QMessageBox.StandardButton.No)
+        dialog.setStyleSheet(SWITCH_CONFIRM_DIALOG_STYLE)
+        return dialog.exec() == QMessageBox.StandardButton.Yes
+
     def switch_selected_signal(self) -> None:
         row = self.monitor_list.currentRow()
         if row < 0 or row >= len(self.snapshots):
@@ -563,26 +606,16 @@ class MonitorInfoWindow(QMainWindow):
             self.statusBar().showMessage(f"{snapshot.display_title} 当前已经是 {target_label}", 4000)
             return
 
-        answer = QMessageBox.question(
-            self,
-            "确认切换信号源",
-            (
-                f"准备将 {snapshot.display_title} 切换到 {target_label}。\n\n"
-                "切换后显示器可能会暂时黑屏；如果该输入口没有有效信号，你需要手动切回原输入源。\n\n"
-                "是否继续？"
-            ),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
+        if not self._confirm_signal_switch(snapshot, target_label):
             return
 
+        self.refresh_timer.stop()
         self.switch_signal_button.setEnabled(False)
         self.statusBar().showMessage(f"正在切换 {snapshot.display_title} 到 {target_label}...", 5000)
         success, message = switch_monitor_input_source(snapshot, target_code)
         self.statusBar().showMessage(message, 7000)
-        QTimer.singleShot(1800, lambda: self.refresh_monitors(force=True))
-        QTimer.singleShot(2200, self._restore_switch_button_state)
+        QTimer.singleShot(SIGNAL_SWITCH_REFRESH_DELAY_MS, lambda: self.refresh_monitors(force=True))
+        QTimer.singleShot(SIGNAL_SWITCH_BUTTON_RESTORE_DELAY_MS, self._restore_switch_button_state)
 
         if success:
             self.signal_status.setText(
@@ -593,9 +626,11 @@ class MonitorInfoWindow(QMainWindow):
         row = self.monitor_list.currentRow()
         if row < 0 or row >= len(self.snapshots):
             self.switch_signal_button.setEnabled(False)
-            return
-        snapshot = self.snapshots[row]
-        self.switch_signal_button.setEnabled(snapshot.input_switch_supported and len(snapshot.supported_input_sources) > 1)
+        else:
+            snapshot = self.snapshots[row]
+            self.switch_signal_button.setEnabled(snapshot.input_switch_supported and len(snapshot.supported_input_sources) > 1)
+        if not self.refresh_timer.isActive():
+            self.refresh_timer.start(AUTO_REFRESH_INTERVAL_MS)
 
     def render_empty_state(self) -> None:
         self.detail_title.setText("未检测到显示器")
