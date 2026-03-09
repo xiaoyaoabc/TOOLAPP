@@ -130,6 +130,26 @@ QPushButton#accentButton {
 QPushButton#accentButton:hover {
     background: #18474f;
 }
+QComboBox#signalSelector {
+    background: #183c56;
+    color: white;
+    border: 1px solid #183c56;
+    selection-background-color: #183c56;
+    selection-color: white;
+}
+QComboBox#signalSelector:hover {
+    background: #214a68;
+}
+QComboBox#signalSelector QAbstractItemView {
+    background: #183c56;
+    color: white;
+    border: 1px solid #2b6170;
+    selection-background-color: #2b6170;
+    selection-color: white;
+}
+QComboBox#signalSelector::drop-down {
+    border: none;
+}
 QScrollArea {
     border: none;
     background: transparent;
@@ -370,6 +390,7 @@ class MonitorInfoWindow(QMainWindow):
         selector_caption = QLabel("切换到")
         selector_caption.setObjectName("cardCaption")
         self.signal_selector = QComboBox()
+        self.signal_selector.setObjectName("signalSelector")
         self.signal_selector.setMinimumWidth(240)
         self.switch_signal_button = QPushButton("切换信号")
         self.switch_signal_button.setObjectName("accentButton")
@@ -689,3 +710,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
