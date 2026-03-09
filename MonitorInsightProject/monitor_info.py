@@ -143,6 +143,19 @@ class MonitorControlInfo:
 
 
 @dataclass(slots=True)
+class PhysicalMonitorSession:
+    snapshot_identity: tuple[str, str, str, str, tuple[int, int]]
+    monitor_count: int
+    monitors: object
+    display_title: str
+    closed: bool = False
+
+    @property
+    def primary_handle(self) -> wintypes.HANDLE:
+        return self.monitors[0].hPhysicalMonitor
+
+
+@dataclass(slots=True)
 class MonitorSnapshot:
     index: int
     name: str
@@ -339,6 +352,23 @@ def _format_windows_error(prefix: str) -> str:
 def _monitor_cache_key(gdi_device_name: str, rect: tuple[int, int, int, int]) -> str:
     device_name = gdi_device_name.strip() or "UNKNOWN"
     return f"{device_name}:{rect[0]},{rect[1]},{rect[2]},{rect[3]}"
+
+
+def _monitor_matches_snapshot(
+    snapshot: MonitorSnapshot,
+    rect: tuple[int, int, int, int],
+    device_name: str,
+    physical_monitor_description: str = "",
+) -> bool:
+    target_device = snapshot.gdi_device_name.strip()
+    target_description = snapshot.physical_monitor_description.strip()
+    if target_device and device_name == target_device:
+        return True
+    if rect in (snapshot.monitor_rect, snapshot.native_monitor_rect):
+        return True
+    if target_description and physical_monitor_description.strip() == target_description:
+        return True
+    return False
 
 
 def _get_cached_capabilities(cache_key: str) -> CachedMonitorCapabilities | None:
@@ -628,23 +658,16 @@ def collect_monitor_snapshots(app: QApplication | None = None) -> list[MonitorSn
     return snapshots
 
 
-def switch_monitor_input_source(snapshot: MonitorSnapshot, input_source_code: int) -> tuple[bool, str]:
+def open_monitor_input_session(snapshot: MonitorSnapshot) -> tuple[PhysicalMonitorSession | None, str]:
     if sys.platform != "win32":
-        return False, "当前仅支持在 Windows 上切换显示器输入源"
-
-    if snapshot.supported_input_sources:
-        supported_codes = {option.code for option in snapshot.supported_input_sources}
-        if input_source_code not in supported_codes:
-            return False, f"当前显示器未声明支持 {input_source_label(input_source_code)}"
+        return None, "当前仅支持在 Windows 上控制显示器输入源"
 
     state = {
         "matched": False,
-        "success": False,
+        "session": None,
         "message": "未找到对应的物理显示器",
     }
-    target_rect = snapshot.monitor_rect
-    target_native_rect = snapshot.native_monitor_rect
-    target_device = snapshot.gdi_device_name.strip()
+    target_description = snapshot.physical_monitor_description.strip()
 
     def callback(hmonitor, hdc, lprc, lparam):
         info = MONITORINFOEXW()
@@ -659,46 +682,107 @@ def switch_monitor_input_source(snapshot: MonitorSnapshot, input_source_code: in
             int(info.rcMonitor.bottom),
         )
         device_name = info.szDevice.strip()
-        if target_device:
-            if device_name != target_device:
-                return True
-        elif rect not in (target_rect, target_native_rect):
+        hinted_match = _monitor_matches_snapshot(snapshot, rect, device_name)
+        if not hinted_match and not target_description:
             return True
 
-        state["matched"] = True
         count = wintypes.DWORD()
         if not dxva2.GetNumberOfPhysicalMonitorsFromHMONITOR(hmonitor, ctypes.byref(count)):
-            state["message"] = _format_windows_error("无法获取物理显示器数量")
+            if hinted_match:
+                state["matched"] = True
+                state["message"] = _format_windows_error("无法获取物理显示器数量")
+                return False
             return True
+
         if count.value == 0:
-            state["message"] = "未发现可控制的物理显示器"
+            if hinted_match:
+                state["matched"] = True
+                state["message"] = "未发现可控制的物理显示器"
+                return False
             return True
 
         monitors = (PHYSICAL_MONITOR * count.value)()
         if not dxva2.GetPhysicalMonitorsFromHMONITOR(hmonitor, count.value, monitors):
-            state["message"] = _format_windows_error("无法获取物理显示器句柄")
+            if hinted_match:
+                state["matched"] = True
+                state["message"] = _format_windows_error("无法获取物理显示器句柄")
+                return False
             return True
 
-        try:
-            primary_monitor = monitors[0]
-            if not dxva2.SetVCPFeature(primary_monitor.hPhysicalMonitor, VCP_CODE_INPUT_SELECT, int(input_source_code)):
-                state["message"] = _format_windows_error("发送输入源切换命令失败")
-                return True
-            state["success"] = True
-            state["message"] = (
-                f"已发送切换命令：{snapshot.display_title} -> {input_source_label(input_source_code)}"
-            )
-        finally:
+        primary_monitor = monitors[0]
+        physical_description = primary_monitor.szPhysicalMonitorDescription.strip()
+        if not _monitor_matches_snapshot(snapshot, rect, device_name, physical_description):
             dxva2.DestroyPhysicalMonitors(count.value, monitors)
-        return True
+            return True
+
+        state["matched"] = True
+        state["session"] = PhysicalMonitorSession(
+            snapshot_identity=snapshot.identity,
+            monitor_count=int(count.value),
+            monitors=monitors,
+            display_title=snapshot.display_title,
+        )
+        state["message"] = "已连接到物理显示器控制会话"
+        return False
 
     enum_callback = MONITORENUMPROC(callback)
     if not user32.EnumDisplayMonitors(None, None, enum_callback, 0) and not state["matched"]:
-        return False, _format_windows_error("枚举显示器失败")
-    if not state["matched"]:
-        return False, state["message"]
-    return bool(state["success"]), str(state["message"])
+        return None, _format_windows_error("枚举显示器失败")
 
+    session = state["session"]
+    if session is None:
+        return None, str(state["message"])
+    return session, str(state["message"])
+
+
+def close_monitor_input_session(session: PhysicalMonitorSession | None) -> None:
+    if sys.platform != "win32" or session is None or session.closed:
+        return
+    try:
+        dxva2.DestroyPhysicalMonitors(session.monitor_count, session.monitors)
+    finally:
+        session.closed = True
+
+
+def read_monitor_input_source(session: PhysicalMonitorSession | None) -> tuple[int | None, str]:
+    if sys.platform != "win32":
+        return None, "当前仅支持在 Windows 上读取显示器输入源"
+    if session is None or session.closed:
+        return None, "显示器控制会话已关闭"
+    return _read_current_input_source_code(session.primary_handle)
+
+
+def set_monitor_input_session_source(
+    session: PhysicalMonitorSession | None,
+    input_source_code: int,
+    display_title: str = "",
+) -> tuple[bool, str]:
+    if sys.platform != "win32":
+        return False, "当前仅支持在 Windows 上切换显示器输入源"
+    if session is None or session.closed:
+        return False, "显示器控制会话已关闭"
+    if not dxva2.SetVCPFeature(session.primary_handle, VCP_CODE_INPUT_SELECT, int(input_source_code)):
+        return False, _format_windows_error("发送输入源切换命令失败")
+    title = display_title or session.display_title or "显示器"
+    return True, f"已发送切换命令：{title} -> {input_source_label(input_source_code)}"
+
+
+def switch_monitor_input_source(snapshot: MonitorSnapshot, input_source_code: int) -> tuple[bool, str]:
+    if sys.platform != "win32":
+        return False, "当前仅支持在 Windows 上切换显示器输入源"
+
+    if snapshot.supported_input_sources:
+        supported_codes = {option.code for option in snapshot.supported_input_sources}
+        if input_source_code not in supported_codes:
+            return False, f"当前显示器未声明支持 {input_source_label(input_source_code)}"
+
+    session, message = open_monitor_input_session(snapshot)
+    if session is None:
+        return False, message
+    try:
+        return set_monitor_input_session_source(session, input_source_code, snapshot.display_title)
+    finally:
+        close_monitor_input_session(session)
 
 def snapshot_signature(snapshots: list[MonitorSnapshot]) -> tuple:
     return tuple(
@@ -733,3 +817,4 @@ def save_snapshot_report(path: str | Path, snapshots: list[MonitorSnapshot]) -> 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(snapshots_to_json(snapshots), encoding="utf-8")
     return output_path
+

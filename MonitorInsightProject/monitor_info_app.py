@@ -1,16 +1,16 @@
 ﻿from __future__ import annotations
 
 import argparse
-from pathlib import Path
+import html
 
 from PyQt6.QtCore import QSize, QTimer, Qt
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
-    QFileDialog,
+    QDialog,
+    QDialogButtonBox,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -18,9 +18,8 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QScrollArea,
-    QSplitter,
     QStatusBar,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -28,135 +27,157 @@ from PyQt6.QtWidgets import (
 from monitor_info import (
     APP_NAME,
     MonitorSnapshot,
+    close_monitor_input_session,
     collect_monitor_snapshots,
     ensure_application,
     input_source_label,
+    open_monitor_input_session,
+    read_monitor_input_source,
     save_snapshot_report,
+    set_monitor_input_session_source,
     set_windows_app_id,
     snapshot_signature,
     snapshots_to_json,
-    switch_monitor_input_source,
 )
 
 AUTO_REFRESH_INTERVAL_MS = 6000
-SIGNAL_SWITCH_REFRESH_DELAY_MS = 900
-SIGNAL_SWITCH_BUTTON_RESTORE_DELAY_MS = 1400
+SWITCH_VERIFY_DELAY_MS = 5000
+SWITCH_RECOVERY_REFRESH_DELAY_MS = 1300
 
 STYLE_SHEET = """
 QMainWindow {
-    background: #eef3f9;
+    background: #eef2f5;
 }
 QWidget {
-    color: #132238;
+    color: #172b3a;
     font-family: "Microsoft YaHei UI", "Segoe UI";
-    font-size: 10.5pt;
-}
-QFrame#headerCard {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 #17324d, stop:0.55 #1f5660, stop:1 #2f7a6b);
-    border-radius: 22px;
-}
-QFrame#panelCard, QFrame#heroCard, QFrame#infoCard {
-    background: rgba(255, 255, 255, 0.96);
-    border: 1px solid #d9e4f0;
-    border-radius: 18px;
-}
-QLabel#heroTitle, QLabel#heroSubtitle, QLabel#heroMeta, QLabel#badgeLabel {
-    color: white;
-}
-QLabel#heroTitle {
-    font-size: 22pt;
-    font-weight: 700;
-}
-QLabel#heroSubtitle {
-    font-size: 11pt;
-}
-QLabel#heroMeta {
     font-size: 10pt;
 }
+QFrame#card {
+    background: rgba(255, 255, 255, 0.98);
+    border: 1px solid #d7dfe7;
+    border-radius: 16px;
+}
+QLabel#windowTitle {
+    color: #183447;
+    font-size: 16pt;
+    font-weight: 700;
+}
+QLabel#summaryLabel {
+    color: #5e7182;
+    font-size: 9.4pt;
+}
 QLabel#sectionTitle {
-    font-size: 11pt;
+    color: #183447;
+    font-size: 10.2pt;
     font-weight: 700;
 }
-QLabel#cardCaption {
-    color: #62758c;
-    font-size: 9.5pt;
-}
-QLabel#cardValue {
-    color: #132238;
-    font-size: 12.5pt;
+QLabel#monitorTitle {
+    color: #183447;
+    font-size: 11.8pt;
     font-weight: 700;
 }
-QLabel#badgeLabel {
-    background: rgba(255, 255, 255, 0.14);
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 14px;
-    padding: 8px 14px;
+QLabel#captionLabel {
+    color: #718395;
+    font-size: 9.2pt;
+}
+QLabel#signalValue {
+    color: #183447;
+    font-size: 10.6pt;
     font-weight: 700;
+}
+QLabel#statusLabel {
+    color: #506273;
+    font-size: 9.1pt;
 }
 QListWidget {
     background: transparent;
     border: none;
     outline: none;
-    padding: 6px;
+    padding: 0;
 }
 QListWidget::item {
-    background: white;
-    border: 1px solid #d9e4f0;
-    border-radius: 16px;
-    margin: 6px 0;
-    padding: 14px 16px;
+    background: #f8fafc;
+    border: 1px solid #dfe6ee;
+    border-radius: 12px;
+    margin: 4px 0;
+    padding: 10px 12px;
 }
 QListWidget::item:selected {
-    background: #183c56;
+    background: #183447;
     color: white;
-    border: 1px solid #183c56;
+    border: 1px solid #183447;
 }
 QPushButton, QComboBox {
-    background: #f8fbff;
-    border: 1px solid #d9e4f0;
-    border-radius: 14px;
-    padding: 10px 16px;
+    background: #f8fafc;
+    border: 1px solid #d7dfe7;
+    border-radius: 11px;
+    padding: 8px 12px;
     font-weight: 700;
 }
 QPushButton:hover, QComboBox:hover {
-    background: #e9f2fb;
+    background: #edf3f8;
 }
 QPushButton#accentButton {
-    background: #1f5660;
+    background: #183447;
     color: white;
-    border: 1px solid #1f5660;
+    border: 1px solid #183447;
 }
 QPushButton#accentButton:hover {
-    background: #18474f;
+    background: #244960;
+}
+QPushButton:disabled, QComboBox:disabled {
+    color: #94a2af;
+    background: #f3f6f8;
+    border: 1px solid #dfe6ec;
 }
 QComboBox#signalSelector {
-    background: #183c56;
+    background: #183447;
     color: white;
-    border: 1px solid #183c56;
-    selection-background-color: #183c56;
+    border: 1px solid #183447;
+    selection-background-color: #183447;
     selection-color: white;
 }
 QComboBox#signalSelector:hover {
-    background: #214a68;
+    background: #244960;
 }
 QComboBox#signalSelector QAbstractItemView {
-    background: #183c56;
+    background: #183447;
     color: white;
-    border: 1px solid #2b6170;
-    selection-background-color: #2b6170;
+    border: 1px solid #244960;
+    selection-background-color: #2c5874;
     selection-color: white;
 }
 QComboBox#signalSelector::drop-down {
     border: none;
 }
-QScrollArea {
-    border: none;
-    background: transparent;
-}
 QStatusBar {
     background: transparent;
-    color: #4f6176;
+    color: #5e7182;
+}
+"""
+
+DETAIL_DIALOG_STYLE = """
+QDialog {
+    background: #f4f8fb;
+}
+QTextBrowser {
+    background: white;
+    border: 1px solid #dbe5ef;
+    border-radius: 12px;
+    padding: 8px;
+    color: #182838;
+}
+QPushButton {
+    background: #183447;
+    color: white;
+    border: 1px solid #183447;
+    border-radius: 10px;
+    padding: 8px 16px;
+    font-weight: 700;
+}
+QPushButton:hover {
+    background: #244960;
 }
 """
 
@@ -166,16 +187,16 @@ QMessageBox {
 }
 QMessageBox QLabel {
     color: white;
-    min-width: 360px;
-    font-size: 10.5pt;
+    min-width: 320px;
+    font-size: 10.1pt;
 }
 QMessageBox QPushButton {
     background: rgba(255, 255, 255, 0.14);
     color: white;
     border: 1px solid rgba(255, 255, 255, 0.24);
-    border-radius: 12px;
-    padding: 9px 18px;
-    min-width: 96px;
+    border-radius: 11px;
+    padding: 8px 16px;
+    min-width: 90px;
     font-weight: 700;
 }
 QMessageBox QPushButton:hover {
@@ -183,48 +204,81 @@ QMessageBox QPushButton:hover {
 }
 """
 
-CARD_FIELDS = [
-    ("manufacturer", "厂商"),
-    ("model", "型号"),
-    ("serial_number", "序列号"),
-    ("primary", "主显示器"),
-    ("current_input_source", "当前信号"),
-    ("supported_input_sources", "支持信号"),
-    ("desktop_resolution", "桌面分辨率"),
-    ("estimated_native_resolution", "估算原生分辨率"),
-    ("refresh_rate_hz", "刷新率"),
-    ("scale", "缩放比例"),
-    ("orientation", "方向"),
-    ("position", "屏幕位置"),
-    ("work_area_resolution", "可用工作区"),
-    ("physical_size_mm", "物理尺寸"),
-    ("diagonal_inches", "屏幕对角线"),
-    ("dpi", "DPI"),
-    ("color_depth", "色深"),
-]
 
-
-class InfoCard(QFrame):
-    def __init__(self, title: str, parent: QWidget | None = None):
+class MonitorDetailDialog(QDialog):
+    def __init__(self, snapshot: MonitorSnapshot, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setObjectName("infoCard")
+        self.setWindowTitle(f"{snapshot.display_title} - 显示器信息")
+        self.resize(500, 560)
+        self.setMinimumSize(430, 460)
+        self.setStyleSheet(DETAIL_DIALOG_STYLE)
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(6)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
-        self.caption = QLabel(title)
-        self.caption.setObjectName("cardCaption")
-        self.caption.setWordWrap(True)
-        self.value = QLabel("-")
-        self.value.setObjectName("cardValue")
-        self.value.setWordWrap(True)
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(False)
+        browser.setHtml(self._build_html(snapshot))
+        layout.addWidget(browser, 1)
 
-        layout.addWidget(self.caption)
-        layout.addWidget(self.value)
-        layout.addStretch(1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+        layout.addWidget(buttons)
 
-    def set_value(self, value: str) -> None:
-        self.value.setText(value)
+    def _build_html(self, snapshot: MonitorSnapshot) -> str:
+        rows = [
+            ("显示器", snapshot.display_title),
+            ("厂商", snapshot.manufacturer or "未提供"),
+            ("型号", snapshot.model or snapshot.name or "未提供"),
+            ("序列号", snapshot.serial_number or "未提供"),
+            ("主显示器", "是" if snapshot.is_primary else "否"),
+            ("当前信号", snapshot.current_input_source_text),
+            ("支持信号", snapshot.supported_input_source_text),
+            ("桌面分辨率", f"{snapshot.desktop_resolution[0]} x {snapshot.desktop_resolution[1]}"),
+            (
+                "估算原生分辨率",
+                f"{snapshot.estimated_native_resolution[0]} x {snapshot.estimated_native_resolution[1]}",
+            ),
+            ("刷新率", f"{snapshot.refresh_rate_hz:.3f} Hz"),
+            ("缩放比例", f"{snapshot.scale_percent}% ({snapshot.scale_factor:.3f}x)"),
+            ("方向", snapshot.orientation),
+            ("屏幕位置", f"X={snapshot.position[0]}, Y={snapshot.position[1]}"),
+            ("可用工作区", f"{snapshot.work_area_resolution[0]} x {snapshot.work_area_resolution[1]}"),
+            (
+                "物理尺寸",
+                (
+                    f"{snapshot.physical_size_mm[0]:.1f} x {snapshot.physical_size_mm[1]:.1f} mm"
+                    if snapshot.physical_size_mm[0] > 0 and snapshot.physical_size_mm[1] > 0
+                    else "未提供"
+                ),
+            ),
+            (
+                "屏幕对角线",
+                f"{snapshot.diagonal_inches:.2f} 英寸" if snapshot.diagonal_inches > 0 else "未提供",
+            ),
+            ("DPI", f"逻辑 {snapshot.logical_dpi:.2f} / 物理 {snapshot.physical_dpi:.2f}"),
+            ("色深", f"{snapshot.color_depth} bit"),
+            ("DDC/CI", "支持" if snapshot.ddc_ci_supported else "未检测到"),
+            ("系统显示设备名", snapshot.gdi_device_name or "未提供"),
+            ("物理显示器描述", snapshot.physical_monitor_description or "未提供"),
+            ("输入源状态", snapshot.input_control_error or "正常"),
+        ]
+        table_rows = "".join(
+            "<tr>"
+            f"<td style='padding:8px 10px;color:#6a7f95;font-weight:700;width:148px'>{html.escape(label)}</td>"
+            f"<td style='padding:8px 10px;color:#182838'>{html.escape(value)}</td>"
+            "</tr>"
+            for label, value in rows
+        )
+        return (
+            "<html><body style='font-family:Microsoft YaHei UI, Segoe UI; background:#ffffff;'>"
+            "<h2 style='color:#183447;margin:4px 0 12px 0'>显示器详细信息</h2>"
+            "<table style='width:100%; border-collapse:collapse;'>"
+            f"{table_rows}"
+            "</table></body></html>"
+        )
 
 
 class MonitorInfoWindow(QMainWindow):
@@ -234,205 +288,115 @@ class MonitorInfoWindow(QMainWindow):
         self.snapshots: list[MonitorSnapshot] = []
         self._signature: tuple = ()
         self._selected_identity: tuple | None = None
-        self.cards: dict[str, InfoCard] = {}
+        self._pending_switch: dict | None = None
         self._build_ui()
         self._connect_runtime_signals()
         self.refresh_monitors(force=True)
 
     def _build_ui(self) -> None:
         self.setWindowTitle(APP_NAME)
-        self.resize(1280, 840)
-        self.setMinimumSize(1040, 720)
+        self.setFixedSize(520, 560)
         self.setStyleSheet(STYLE_SHEET)
         self.setStatusBar(QStatusBar(self))
         self.setFont(QFont("Microsoft YaHei UI", 10))
 
         root = QWidget()
-        root_layout = QVBoxLayout(root)
-        root_layout.setContentsMargins(18, 18, 18, 12)
-        root_layout.setSpacing(16)
+        layout = QVBoxLayout(root)
+        layout.setContentsMargins(12, 12, 12, 10)
+        layout.setSpacing(10)
 
         header = QFrame()
-        header.setObjectName("headerCard")
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(22, 20, 22, 20)
-        header_layout.setSpacing(18)
+        header.setObjectName("card")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(14, 14, 14, 14)
+        header_layout.setSpacing(8)
 
-        title_column = QVBoxLayout()
-        title_column.setSpacing(6)
-
-        hero_title = QLabel("Monitor Insight")
-        hero_title.setObjectName("heroTitle")
-        hero_subtitle = QLabel(
-            "实时识别显示器信息，并在显示器支持 DDC/CI 时显示当前信号、支持信号，以及切换输入源。"
-        )
-        hero_subtitle.setObjectName("heroSubtitle")
-        hero_subtitle.setWordWrap(True)
-        self.hero_meta = QLabel("准备检测显示器...")
-        self.hero_meta.setObjectName("heroMeta")
-
-        title_column.addWidget(hero_title)
-        title_column.addWidget(hero_subtitle)
-        title_column.addWidget(self.hero_meta)
-
-        action_column = QVBoxLayout()
-        action_column.setSpacing(12)
-        action_column.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-
-        self.count_badge = QLabel("0 台显示器")
-        self.count_badge.setObjectName("badgeLabel")
-        self.count_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        button_row = QHBoxLayout()
-        button_row.setSpacing(10)
-        self.refresh_button = QPushButton("刷新识别")
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        title = QLabel("Monitor Insight")
+        title.setObjectName("windowTitle")
+        self.refresh_button = QPushButton("刷新")
         self.refresh_button.setObjectName("accentButton")
         self.refresh_button.clicked.connect(lambda: self.refresh_monitors(force=True))
-        self.export_button = QPushButton("导出 JSON")
-        self.export_button.clicked.connect(self.export_snapshot)
-        button_row.addWidget(self.refresh_button)
-        button_row.addWidget(self.export_button)
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+        title_row.addWidget(self.refresh_button)
 
-        action_column.addWidget(self.count_badge, 0, Qt.AlignmentFlag.AlignRight)
-        action_column.addLayout(button_row)
+        self.summary_label = QLabel("正在检测显示器...")
+        self.summary_label.setObjectName("summaryLabel")
+        self.summary_label.setWordWrap(True)
 
-        header_layout.addLayout(title_column, 1)
-        header_layout.addLayout(action_column)
-        root_layout.addWidget(header)
+        header_layout.addLayout(title_row)
+        header_layout.addWidget(self.summary_label)
+        layout.addWidget(header)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
+        monitors_panel = QFrame()
+        monitors_panel.setObjectName("card")
+        monitors_layout = QVBoxLayout(monitors_panel)
+        monitors_layout.setContentsMargins(14, 14, 14, 14)
+        monitors_layout.setSpacing(8)
 
-        left_panel = QFrame()
-        left_panel.setObjectName("panelCard")
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(16, 16, 16, 16)
-        left_layout.setSpacing(12)
-
-        section_title = QLabel("已连接显示器")
-        section_title.setObjectName("sectionTitle")
-        left_layout.addWidget(section_title)
-
+        monitors_title = QLabel("当前检测到的显示器")
+        monitors_title.setObjectName("sectionTitle")
+        self.monitor_count_label = QLabel("0 台显示器")
+        self.monitor_count_label.setObjectName("captionLabel")
         self.monitor_list = QListWidget()
         self.monitor_list.currentRowChanged.connect(self.render_selected_monitor)
-        left_layout.addWidget(self.monitor_list, 1)
 
-        right_panel = QFrame()
-        right_panel.setObjectName("panelCard")
-        right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+        monitors_layout.addWidget(monitors_title)
+        monitors_layout.addWidget(self.monitor_count_label)
+        monitors_layout.addWidget(self.monitor_list, 1)
+        layout.addWidget(monitors_panel, 1)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
+        switch_panel = QFrame()
+        switch_panel.setObjectName("card")
+        switch_layout = QVBoxLayout(switch_panel)
+        switch_layout.setContentsMargins(14, 14, 14, 14)
+        switch_layout.setSpacing(8)
 
-        scroll_body = QWidget()
-        scroll_layout = QVBoxLayout(scroll_body)
-        scroll_layout.setContentsMargins(16, 16, 16, 16)
-        scroll_layout.setSpacing(14)
-
-        hero_card = QFrame()
-        hero_card.setObjectName("heroCard")
-        hero_card_layout = QVBoxLayout(hero_card)
-        hero_card_layout.setContentsMargins(20, 18, 20, 18)
-        hero_card_layout.setSpacing(8)
-
-        self.detail_title = QLabel("未检测到显示器")
-        self.detail_title.setObjectName("sectionTitle")
-        detail_title_font = self.detail_title.font()
-        detail_title_font.setPointSize(16)
-        detail_title_font.setBold(True)
-        self.detail_title.setFont(detail_title_font)
-
-        self.detail_subtitle = QLabel("请确认显示器已连接，或点击“刷新识别”。")
-        self.detail_subtitle.setWordWrap(True)
-        self.detail_position = QLabel("")
-        self.detail_position.setObjectName("cardCaption")
-
-        hero_card_layout.addWidget(self.detail_title)
-        hero_card_layout.addWidget(self.detail_subtitle)
-        hero_card_layout.addWidget(self.detail_position)
-        scroll_layout.addWidget(hero_card)
-
-        signal_card = QFrame()
-        signal_card.setObjectName("panelCard")
-        signal_layout = QVBoxLayout(signal_card)
-        signal_layout.setContentsMargins(18, 16, 18, 16)
-        signal_layout.setSpacing(12)
-
-        signal_title = QLabel("信号源控制")
-        signal_title.setObjectName("sectionTitle")
-        signal_layout.addWidget(signal_title)
-
-        signal_summary_row = QGridLayout()
-        signal_summary_row.setHorizontalSpacing(18)
-        signal_summary_row.setVerticalSpacing(10)
-
-        current_label = QLabel("当前信号")
-        current_label.setObjectName("cardCaption")
-        self.current_signal_value = QLabel("未读取")
-        self.current_signal_value.setObjectName("cardValue")
-        self.current_signal_value.setWordWrap(True)
-
-        supported_label = QLabel("支持的信号")
-        supported_label.setObjectName("cardCaption")
-        self.supported_signal_value = QLabel("未读取")
-        self.supported_signal_value.setObjectName("cardValue")
-        self.supported_signal_value.setWordWrap(True)
-
-        signal_summary_row.addWidget(current_label, 0, 0)
-        signal_summary_row.addWidget(self.current_signal_value, 0, 1)
-        signal_summary_row.addWidget(supported_label, 1, 0)
-        signal_summary_row.addWidget(self.supported_signal_value, 1, 1)
-        signal_layout.addLayout(signal_summary_row)
+        switch_title = QLabel("切换显示信号")
+        switch_title.setObjectName("sectionTitle")
+        self.selected_monitor_label = QLabel("未检测到显示器")
+        self.selected_monitor_label.setObjectName("monitorTitle")
+        self.selected_monitor_summary = QLabel("请先连接显示器")
+        self.selected_monitor_summary.setObjectName("captionLabel")
+        self.current_signal_label = QLabel("当前信号：未读取")
+        self.current_signal_label.setObjectName("signalValue")
+        self.supported_signal_label = QLabel("支持信号：未提供")
+        self.supported_signal_label.setObjectName("captionLabel")
+        self.supported_signal_label.setWordWrap(True)
 
         selector_row = QHBoxLayout()
-        selector_row.setSpacing(10)
-        selector_caption = QLabel("切换到")
-        selector_caption.setObjectName("cardCaption")
+        selector_row.setSpacing(8)
         self.signal_selector = QComboBox()
         self.signal_selector.setObjectName("signalSelector")
-        self.signal_selector.setMinimumWidth(240)
-        self.switch_signal_button = QPushButton("切换信号")
+        self.signal_selector.setMinimumWidth(250)
+        self.switch_signal_button = QPushButton("切换")
         self.switch_signal_button.setObjectName("accentButton")
         self.switch_signal_button.clicked.connect(self.switch_selected_signal)
-        selector_row.addWidget(selector_caption)
         selector_row.addWidget(self.signal_selector, 1)
         selector_row.addWidget(self.switch_signal_button)
-        signal_layout.addLayout(selector_row)
 
-        self.signal_status = QLabel("提示：需要显示器开启 DDC/CI，且显示器本身支持输入源控制，才可以读取并切换信号。")
-        self.signal_status.setObjectName("cardCaption")
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        self.details_button = QPushButton("显示器信息")
+        self.details_button.clicked.connect(self.open_monitor_details)
+        action_row.addWidget(self.details_button)
+        action_row.addStretch(1)
+
+        self.signal_status = QLabel("切换后 5 秒会自动校验，若发现目标信号无效会尝试切回原信号。")
+        self.signal_status.setObjectName("statusLabel")
         self.signal_status.setWordWrap(True)
-        signal_layout.addWidget(self.signal_status)
 
-        scroll_layout.addWidget(signal_card)
-
-        self.card_grid = QGridLayout()
-        self.card_grid.setHorizontalSpacing(14)
-        self.card_grid.setVerticalSpacing(14)
-        for index, (field_key, title) in enumerate(CARD_FIELDS):
-            card = InfoCard(title)
-            row = index // 2
-            column = index % 2
-            self.card_grid.addWidget(card, row, column)
-            self.cards[field_key] = card
-        scroll_layout.addLayout(self.card_grid)
-
-        self.detail_hint = QLabel(
-            "提示：桌面分辨率为 Windows 当前桌面坐标大小；估算原生分辨率会结合系统缩放进行换算；信号源信息依赖显示器 DDC/CI。"
-        )
-        self.detail_hint.setObjectName("cardCaption")
-        self.detail_hint.setWordWrap(True)
-        scroll_layout.addWidget(self.detail_hint)
-        scroll_layout.addStretch(1)
-
-        scroll.setWidget(scroll_body)
-        right_layout.addWidget(scroll)
-
-        splitter.addWidget(left_panel)
-        splitter.addWidget(right_panel)
-        splitter.setSizes([360, 860])
-        root_layout.addWidget(splitter, 1)
+        switch_layout.addWidget(switch_title)
+        switch_layout.addWidget(self.selected_monitor_label)
+        switch_layout.addWidget(self.selected_monitor_summary)
+        switch_layout.addWidget(self.current_signal_label)
+        switch_layout.addWidget(self.supported_signal_label)
+        switch_layout.addLayout(selector_row)
+        switch_layout.addLayout(action_row)
+        switch_layout.addWidget(self.signal_status)
+        layout.addWidget(switch_panel)
 
         self.setCentralWidget(root)
         self._reset_signal_controls()
@@ -447,6 +411,24 @@ class MonitorInfoWindow(QMainWindow):
         self.refresh_timer.timeout.connect(self.refresh_monitors)
         self.refresh_timer.start()
 
+        self.switch_verify_timer = QTimer(self)
+        self.switch_verify_timer.setSingleShot(True)
+        self.switch_verify_timer.timeout.connect(self._verify_pending_switch)
+
+    def _current_snapshot(self) -> MonitorSnapshot | None:
+        row = self.monitor_list.currentRow()
+        if row < 0 or row >= len(self.snapshots):
+            return None
+        return self.snapshots[row]
+
+    def _find_snapshot_by_identity(self, identity: tuple | None) -> MonitorSnapshot | None:
+        if identity is None:
+            return None
+        for snapshot in self.snapshots:
+            if snapshot.identity == identity:
+                return snapshot
+        return None
+
     def refresh_monitors(self, force: bool = False) -> None:
         snapshots = collect_monitor_snapshots(self.app)
         signature = snapshot_signature(snapshots)
@@ -459,33 +441,30 @@ class MonitorInfoWindow(QMainWindow):
 
         self.snapshots = snapshots
         self._signature = signature
-        controllable_count = sum(1 for snapshot in self.snapshots if snapshot.input_switch_supported)
         self._populate_monitor_list()
-        self.count_badge.setText(f"{len(self.snapshots)} 台显示器")
-        self.hero_meta.setText(
-            f"最近一次识别：共检测到 {len(self.snapshots)} 台显示器，其中 {controllable_count} 台支持信号切换"
+        count = len(self.snapshots)
+        self.monitor_count_label.setText(f"{count} 台显示器")
+        self.summary_label.setText(
+            f"当前识别到 {count} 台显示器。主页只保留切换功能，详细参数请点“显示器信息”。"
         )
-        self.statusBar().showMessage("显示器信息已更新", 3000)
+        self.statusBar().showMessage("显示器信息已更新", 2200)
 
     def _populate_monitor_list(self) -> None:
         self.monitor_list.blockSignals(True)
         self.monitor_list.clear()
 
         for snapshot in self.snapshots:
-            summary_bits = [
-                f"{snapshot.desktop_resolution[0]} x {snapshot.desktop_resolution[1]}",
-                f"{snapshot.refresh_rate_hz:.3f} Hz",
-                f"{snapshot.scale_percent}%",
-            ]
-            if snapshot.current_input_source_code is not None:
-                summary_bits.append(snapshot.current_input_source_label)
+            top_line = snapshot.display_title
             if snapshot.is_primary:
-                summary_bits.insert(0, "主显示器")
-            summary = " | ".join(summary_bits)
-            subtitle = snapshot.manufacturer or "未知厂商"
-            item = QListWidgetItem(f"{snapshot.display_title}\n{subtitle}\n{summary}")
+                top_line += "  ·  主显示器"
+            signal_text = snapshot.current_input_source_label if snapshot.current_input_source_code is not None else "未读取"
+            bottom_line = (
+                f"{snapshot.desktop_resolution[0]} x {snapshot.desktop_resolution[1]}"
+                f"  ·  {signal_text}"
+            )
+            item = QListWidgetItem(f"{top_line}\n{bottom_line}")
             item.setData(Qt.ItemDataRole.UserRole, snapshot.identity)
-            item.setSizeHint(QSize(0, 92))
+            item.setSizeHint(QSize(0, 56))
             self.monitor_list.addItem(item)
 
         target_row = 0
@@ -509,53 +488,16 @@ class MonitorInfoWindow(QMainWindow):
 
         snapshot = self.snapshots[row]
         self._selected_identity = snapshot.identity
-
-        self.detail_title.setText(snapshot.display_title)
-        self.detail_subtitle.setText(
-            f"{snapshot.manufacturer or '未知厂商'}  |  序列号：{snapshot.serial_number or '未提供'}"
+        self.selected_monitor_label.setText(snapshot.display_title)
+        self.selected_monitor_summary.setText(
+            f"{snapshot.manufacturer or '未知厂商'}  ·  {snapshot.refresh_rate_hz:.3f} Hz  ·  缩放 {snapshot.scale_percent}%"
         )
-        self.detail_position.setText(
-            f"位置：({snapshot.position[0]}, {snapshot.position[1]})   |   "
-            f"{'主显示器' if snapshot.is_primary else '扩展显示器'}"
-        )
-
-        self.cards["manufacturer"].set_value(snapshot.manufacturer or "未提供")
-        self.cards["model"].set_value(snapshot.model or snapshot.name or "未提供")
-        self.cards["serial_number"].set_value(snapshot.serial_number or "未提供")
-        self.cards["primary"].set_value("是" if snapshot.is_primary else "否")
-        self.cards["current_input_source"].set_value(snapshot.current_input_source_text)
-        self.cards["supported_input_sources"].set_value(snapshot.supported_input_source_text)
-        self.cards["desktop_resolution"].set_value(
-            f"{snapshot.desktop_resolution[0]} x {snapshot.desktop_resolution[1]}"
-        )
-        self.cards["estimated_native_resolution"].set_value(
-            f"{snapshot.estimated_native_resolution[0]} x {snapshot.estimated_native_resolution[1]}"
-        )
-        self.cards["refresh_rate_hz"].set_value(f"{snapshot.refresh_rate_hz:.3f} Hz")
-        self.cards["scale"].set_value(f"{snapshot.scale_percent}%  ({snapshot.scale_factor:.3f}x)")
-        self.cards["orientation"].set_value(snapshot.orientation)
-        self.cards["position"].set_value(f"X={snapshot.position[0]}, Y={snapshot.position[1]}")
-        self.cards["work_area_resolution"].set_value(
-            f"{snapshot.work_area_resolution[0]} x {snapshot.work_area_resolution[1]}"
-        )
-        if snapshot.physical_size_mm[0] > 0 and snapshot.physical_size_mm[1] > 0:
-            physical_size = f"{snapshot.physical_size_mm[0]:.1f} x {snapshot.physical_size_mm[1]:.1f} mm"
-        else:
-            physical_size = "未提供"
-        self.cards["physical_size_mm"].set_value(physical_size)
-        self.cards["diagonal_inches"].set_value(
-            f"{snapshot.diagonal_inches:.2f} 英寸" if snapshot.diagonal_inches > 0 else "未提供"
-        )
-        self.cards["dpi"].set_value(
-            f"逻辑 {snapshot.logical_dpi:.2f} / 物理 {snapshot.physical_dpi:.2f}"
-        )
-        self.cards["color_depth"].set_value(f"{snapshot.color_depth} bit")
-
         self._update_signal_controls(snapshot)
 
     def _update_signal_controls(self, snapshot: MonitorSnapshot) -> None:
-        self.current_signal_value.setText(snapshot.current_input_source_text)
-        self.supported_signal_value.setText(snapshot.supported_input_source_text)
+        self.details_button.setEnabled(True)
+        self.current_signal_label.setText(f"当前信号：{snapshot.current_input_source_text}")
+        self.supported_signal_label.setText(f"支持信号：{snapshot.supported_input_source_text}")
 
         self.signal_selector.blockSignals(True)
         self.signal_selector.clear()
@@ -568,31 +510,42 @@ class MonitorInfoWindow(QMainWindow):
         self.signal_selector.blockSignals(False)
 
         can_switch = snapshot.input_switch_supported and len(snapshot.supported_input_sources) > 1
-        self.signal_selector.setEnabled(can_switch)
-        self.switch_signal_button.setEnabled(can_switch)
+        busy = self._pending_switch is not None
+        self.signal_selector.setEnabled(can_switch and not busy)
+        self.switch_signal_button.setEnabled(can_switch and not busy)
+        self.refresh_button.setEnabled(not busy)
 
-        if can_switch:
-            self.signal_status.setText(
-                "当前显示器支持通过 DDC/CI 切换输入源。已减少多显示器下的刷新阻塞，切换后会做一次较快的状态同步。"
-            )
+        if busy:
+            self.signal_status.setText("切换命令已发送，正在等待 5 秒校验；若检测到目标信号无效会自动切回。")
+        elif can_switch:
+            self.signal_status.setText("选择目标信号后点击“切换”。如果切换后 5 秒检测到信号无效，会自动尝试切回。")
         elif snapshot.current_input_source_code is not None:
-            self.signal_status.setText(
-                snapshot.input_control_error
-                or "已读取到当前信号，但没有拿到可切换的完整输入源列表。"
-            )
+            self.signal_status.setText(snapshot.input_control_error or "已读取当前信号，但当前无法执行切换。")
         else:
-            self.signal_status.setText(
-                snapshot.input_control_error
-                or "当前显示器没有暴露 DDC/CI 输入源信息，常见原因是显示器菜单里未开启 DDC/CI。"
-            )
+            self.signal_status.setText(snapshot.input_control_error or "当前显示器未返回可用的 DDC/CI 输入源信息。")
 
     def _reset_signal_controls(self) -> None:
-        self.current_signal_value.setText("未读取")
-        self.supported_signal_value.setText("未读取")
+        self.details_button.setEnabled(False)
+        self.selected_monitor_label.setText("未检测到显示器")
+        self.selected_monitor_summary.setText("请连接显示器后点击刷新")
+        self.current_signal_label.setText("当前信号：未读取")
+        self.supported_signal_label.setText("支持信号：未提供")
         self.signal_selector.clear()
         self.signal_selector.setEnabled(False)
         self.switch_signal_button.setEnabled(False)
-        self.signal_status.setText("提示：需要显示器开启 DDC/CI，且显示器本身支持输入源控制，才可以读取并切换信号。")
+        self.refresh_button.setEnabled(True)
+        self.signal_status.setText("切换后 5 秒会自动校验，若发现目标信号无效会尝试切回原信号。")
+
+    def render_empty_state(self) -> None:
+        self._selected_identity = None
+        self._reset_signal_controls()
+
+    def open_monitor_details(self) -> None:
+        snapshot = self._current_snapshot()
+        if snapshot is None:
+            return
+        dialog = MonitorDetailDialog(snapshot, self)
+        dialog.exec()
 
     def _confirm_signal_switch(self, snapshot: MonitorSnapshot, target_label: str) -> bool:
         dialog = QMessageBox(self)
@@ -601,7 +554,7 @@ class MonitorInfoWindow(QMainWindow):
         dialog.setText(
             (
                 f"准备将 {snapshot.display_title} 切换到 {target_label}。\n\n"
-                "切换后显示器可能会暂时黑屏；如果该输入口没有有效信号，你需要手动切回原输入源。\n\n"
+                "5 秒后会自动检查目标信号是否仍然能被当前电脑识别；若检测到无效，会尝试切回原信号。\n\n"
                 "是否继续？"
             )
         )
@@ -611,11 +564,10 @@ class MonitorInfoWindow(QMainWindow):
         return dialog.exec() == QMessageBox.StandardButton.Yes
 
     def switch_selected_signal(self) -> None:
-        row = self.monitor_list.currentRow()
-        if row < 0 or row >= len(self.snapshots):
+        snapshot = self._current_snapshot()
+        if snapshot is None:
             return
 
-        snapshot = self.snapshots[row]
         target_code = self.signal_selector.currentData()
         if target_code is None:
             self.statusBar().showMessage("当前没有可切换的目标信号", 4000)
@@ -630,54 +582,126 @@ class MonitorInfoWindow(QMainWindow):
         if not self._confirm_signal_switch(snapshot, target_label):
             return
 
+        self._clear_pending_switch()
         self.refresh_timer.stop()
+        self.switch_verify_timer.stop()
+        self.refresh_button.setEnabled(False)
+        self.signal_selector.setEnabled(False)
         self.switch_signal_button.setEnabled(False)
-        self.statusBar().showMessage(f"正在切换 {snapshot.display_title} 到 {target_label}...", 5000)
-        success, message = switch_monitor_input_source(snapshot, target_code)
-        self.statusBar().showMessage(message, 7000)
-        QTimer.singleShot(SIGNAL_SWITCH_REFRESH_DELAY_MS, lambda: self.refresh_monitors(force=True))
-        QTimer.singleShot(SIGNAL_SWITCH_BUTTON_RESTORE_DELAY_MS, self._restore_switch_button_state)
 
+        session, message = open_monitor_input_session(snapshot)
+        if session is None:
+            self.signal_status.setText(f"切换失败：{message}")
+            self.refresh_button.setEnabled(True)
+            self._update_signal_controls(snapshot)
+            self.statusBar().showMessage(message, 6000)
+            if not self.refresh_timer.isActive():
+                self.refresh_timer.start(AUTO_REFRESH_INTERVAL_MS)
+            return
+
+        success, message = set_monitor_input_session_source(session, target_code, snapshot.display_title)
+        if not success:
+            close_monitor_input_session(session)
+            self.signal_status.setText(f"切换失败：{message}")
+            self.refresh_button.setEnabled(True)
+            self._update_signal_controls(snapshot)
+            self.statusBar().showMessage(message, 6000)
+            if not self.refresh_timer.isActive():
+                self.refresh_timer.start(AUTO_REFRESH_INTERVAL_MS)
+            return
+
+        self._pending_switch = {
+            "identity": snapshot.identity,
+            "display_title": snapshot.display_title,
+            "original_code": snapshot.current_input_source_code,
+            "target_code": target_code,
+            "target_label": target_label,
+            "session": session,
+        }
+        self.signal_status.setText(
+            f"已发送切换命令到 {target_label}。5 秒后会校验；若检测到目标信号无效，将尝试自动切回。"
+        )
+        self.statusBar().showMessage(message, 5000)
+        self.switch_verify_timer.start(SWITCH_VERIFY_DELAY_MS)
+
+    def _verify_pending_switch(self) -> None:
+        pending = self._pending_switch
+        if pending is None:
+            self._restore_after_switch_flow()
+            return
+
+        self.refresh_monitors(force=True)
+        latest_snapshot = self._find_snapshot_by_identity(pending["identity"])
+        session = pending.get("session")
+        target_code = int(pending["target_code"])
+        original_code = pending["original_code"]
+        target_label = str(pending["target_label"])
+
+        current_code, current_error = read_monitor_input_source(session)
+        latest_code = latest_snapshot.current_input_source_code if latest_snapshot is not None else None
+        latest_visible = latest_snapshot is not None
+        target_confirmed = latest_visible and current_code == target_code and latest_code == target_code
+
+        if target_confirmed:
+            self.signal_status.setText(f"已确认目标信号有效：{target_label}。")
+            self.statusBar().showMessage(f"切换成功：{pending['display_title']} -> {target_label}", 6000)
+            self._restore_after_switch_flow(schedule_refresh_ms=SWITCH_RECOVERY_REFRESH_DELAY_MS)
+            return
+
+        if original_code is None:
+            detail = current_error or "原始信号未知，无法自动切回。"
+            self.signal_status.setText(f"5 秒后检测到目标信号无效，但无法自动切回：{detail}")
+            self.statusBar().showMessage("目标信号无效，自动切回不可用", 7000)
+            self._restore_after_switch_flow(schedule_refresh_ms=SWITCH_RECOVERY_REFRESH_DELAY_MS)
+            return
+
+        revert_label = input_source_label(int(original_code))
+        success, message = set_monitor_input_session_source(session, int(original_code), pending["display_title"])
         if success:
             self.signal_status.setText(
-                f"切换命令已发送到 {target_label}。如果目标端口没有信号，显示器可能会保持黑屏，需在显示器菜单里手动切回。"
+                f"5 秒后检测到目标信号无效，已尝试自动切回 {revert_label}。"
             )
-
-    def _restore_switch_button_state(self) -> None:
-        row = self.monitor_list.currentRow()
-        if row < 0 or row >= len(self.snapshots):
-            self.switch_signal_button.setEnabled(False)
+            self.statusBar().showMessage(
+                f"目标信号无效，已尝试切回 {revert_label}",
+                8000,
+            )
         else:
-            snapshot = self.snapshots[row]
-            self.switch_signal_button.setEnabled(snapshot.input_switch_supported and len(snapshot.supported_input_sources) > 1)
+            fallback_reason = current_error or "未能确认目标信号有效"
+            self.signal_status.setText(
+                f"检测到目标信号无效，自动切回失败：{message}"
+            )
+            self.statusBar().showMessage(
+                f"{fallback_reason}，自动切回失败：{message}",
+                8000,
+            )
+        self._restore_after_switch_flow(schedule_refresh_ms=SWITCH_RECOVERY_REFRESH_DELAY_MS)
+
+    def _clear_pending_switch(self) -> None:
+        if self._pending_switch is None:
+            return
+        session = self._pending_switch.get("session")
+        if session is not None:
+            close_monitor_input_session(session)
+        self._pending_switch = None
+
+    def _restore_after_switch_flow(self, schedule_refresh_ms: int | None = None) -> None:
+        self._clear_pending_switch()
         if not self.refresh_timer.isActive():
             self.refresh_timer.start(AUTO_REFRESH_INTERVAL_MS)
+        self.refresh_button.setEnabled(True)
+        current_snapshot = self._current_snapshot()
+        if current_snapshot is not None:
+            self._update_signal_controls(current_snapshot)
+        else:
+            self._reset_signal_controls()
+        if schedule_refresh_ms is not None:
+            QTimer.singleShot(schedule_refresh_ms, lambda: self.refresh_monitors(force=True))
 
-    def render_empty_state(self) -> None:
-        self.detail_title.setText("未检测到显示器")
-        self.detail_subtitle.setText("请确认显示器连接正常，然后点击“刷新识别”。")
-        self.detail_position.setText("")
-        for card in self.cards.values():
-            card.set_value("-")
-        self._reset_signal_controls()
+    def closeEvent(self, event) -> None:
+        self.switch_verify_timer.stop()
+        self._clear_pending_switch()
+        super().closeEvent(event)
 
-    def export_snapshot(self) -> None:
-        if not self.snapshots:
-            self.statusBar().showMessage("当前没有可导出的显示器信息", 4000)
-            return
-
-        default_path = Path.cwd() / "monitor_snapshot.json"
-        output_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "导出显示器信息",
-            str(default_path),
-            "JSON 文件 (*.json)",
-        )
-        if not output_path:
-            return
-
-        save_snapshot_report(output_path, self.snapshots)
-        self.statusBar().showMessage(f"已导出到 {output_path}", 5000)
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -685,6 +709,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="在终端输出显示器信息 JSON 并退出")
     parser.add_argument("--json-path", default="", help="将显示器信息导出到指定 JSON 文件并退出")
     return parser
+
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -710,4 +735,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
