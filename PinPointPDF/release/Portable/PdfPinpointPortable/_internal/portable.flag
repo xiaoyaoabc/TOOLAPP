@@ -1,0 +1,2 @@
+Portable mode marker for packaged builds.
+When this file exists next to PdfPinpoint.exe, runtime data stays beside the executable.
