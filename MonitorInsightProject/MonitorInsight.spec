@@ -4,12 +4,14 @@ from pathlib import Path
 
 
 project_dir = Path(SPECPATH)
+assets_dir = project_dir / "assets"
+icon_file = assets_dir / "monitor_insight.ico"
 
 a = Analysis(
     ["main.py"],
     pathex=[str(project_dir)],
     binaries=[],
-    datas=[],
+    datas=[(str(assets_dir), "assets")],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -39,4 +41,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(icon_file),
 )

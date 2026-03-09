@@ -2,9 +2,11 @@
 
 import argparse
 import html
+import sys
+from pathlib import Path
 
 from PyQt6.QtCore import QTimer, Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -26,22 +28,18 @@ from PyQt6.QtWidgets import (
 from monitor_info import (
     APP_NAME,
     MonitorSnapshot,
-    close_monitor_input_session,
     collect_monitor_snapshots,
     ensure_application,
     input_source_label,
-    open_monitor_input_session,
-    read_monitor_input_source,
     save_snapshot_report,
-    set_monitor_input_session_source,
     set_windows_app_id,
     snapshot_signature,
     snapshots_to_json,
+    switch_monitor_input_source,
 )
 
 AUTO_REFRESH_INTERVAL_MS = 6000
-SWITCH_VERIFY_DELAY_MS = 5000
-SWITCH_RECOVERY_REFRESH_DELAY_MS = 1300
+POST_SWITCH_REFRESH_DELAY_MS = 1300
 
 STYLE_SHEET = """
 QMainWindow {
@@ -203,10 +201,35 @@ QMessageBox QPushButton:hover {
 """
 
 
+def resource_root() -> Path:
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", "")
+        if meipass:
+            return Path(meipass)
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+
+def app_icon_path() -> Path:
+    return resource_root() / "assets" / "monitor_insight.ico"
+
+
+
+def load_app_icon() -> QIcon:
+    icon_file = app_icon_path()
+    if icon_file.exists():
+        return QIcon(str(icon_file))
+    return QIcon()
+
+
 class MonitorDetailDialog(QDialog):
     def __init__(self, snapshot: MonitorSnapshot, parent: QWidget | None = None):
         super().__init__(parent)
         self.setWindowTitle(f"{snapshot.display_title} - 显示器信息")
+        icon = load_app_icon()
+        if not icon.isNull():
+            self.setWindowIcon(icon)
         self.resize(500, 560)
         self.setMinimumSize(430, 460)
         self.setStyleSheet(DETAIL_DIALOG_STYLE)
@@ -286,7 +309,7 @@ class MonitorInfoWindow(QMainWindow):
         self.snapshots: list[MonitorSnapshot] = []
         self._signature: tuple = ()
         self._selected_identity: tuple | None = None
-        self._pending_switch: dict | None = None
+        self._last_switch_context: dict | None = None
         self._monitor_buttons: list[QPushButton] = []
         self._build_ui()
         self._connect_runtime_signals()
@@ -294,6 +317,10 @@ class MonitorInfoWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         self.setWindowTitle(APP_NAME)
+        icon = load_app_icon()
+        if not icon.isNull():
+            self.setWindowIcon(icon)
+            self.app.setWindowIcon(icon)
         self.resize(520, 560)
         self.setMinimumSize(520, 560)
         self.setStyleSheet(STYLE_SHEET)
@@ -390,10 +417,13 @@ class MonitorInfoWindow(QMainWindow):
         action_row.setSpacing(8)
         self.details_button = QPushButton("显示器信息")
         self.details_button.clicked.connect(self.open_monitor_details)
+        self.revert_signal_button = QPushButton("手动切回")
+        self.revert_signal_button.clicked.connect(self.revert_to_previous_signal)
         action_row.addWidget(self.details_button)
+        action_row.addWidget(self.revert_signal_button)
         action_row.addStretch(1)
 
-        self.signal_status = QLabel("切换后 5 秒会尽量校验；只有明确检测到切换未生效时才自动切回。")
+        self.signal_status = QLabel("切换后不会自动回退；如果需要恢复，请手动点击“手动切回”。")
         self.signal_status.setObjectName("statusLabel")
         self.signal_status.setWordWrap(True)
 
@@ -419,10 +449,6 @@ class MonitorInfoWindow(QMainWindow):
         self.refresh_timer.setInterval(AUTO_REFRESH_INTERVAL_MS)
         self.refresh_timer.timeout.connect(self.refresh_monitors)
         self.refresh_timer.start()
-
-        self.switch_verify_timer = QTimer(self)
-        self.switch_verify_timer.setSingleShot(True)
-        self.switch_verify_timer.timeout.connect(self._verify_pending_switch)
 
     def _current_snapshot(self) -> MonitorSnapshot | None:
         snapshot = self._find_snapshot_by_identity(self._selected_identity)
@@ -452,7 +478,7 @@ class MonitorInfoWindow(QMainWindow):
         count = len(self.snapshots)
         self.monitor_count_label.setText(f"{count} 台显示器")
         self.summary_label.setText(
-            f"当前识别到 {count} 台显示器。点击按键选择显示器，窗口也支持放大和全屏。"
+            f"当前识别到 {count} 台显示器。点击按键选择显示器；切换信号后若需要恢复，请手动切回。"
         )
         self.statusBar().showMessage("显示器信息已更新", 2200)
 
@@ -510,10 +536,6 @@ class MonitorInfoWindow(QMainWindow):
             button.blockSignals(False)
 
     def select_monitor(self, identity: tuple) -> None:
-        if self._selected_identity == identity:
-            self._sync_monitor_button_states()
-            self.render_selected_monitor(self._current_snapshot())
-            return
         self._selected_identity = identity
         self._sync_monitor_button_states()
         self.render_selected_monitor(self._current_snapshot())
@@ -547,22 +569,39 @@ class MonitorInfoWindow(QMainWindow):
         self.signal_selector.blockSignals(False)
 
         can_switch = snapshot.input_switch_supported and len(snapshot.supported_input_sources) > 1
-        busy = self._pending_switch is not None
-        self.signal_selector.setEnabled(can_switch and not busy)
-        self.switch_signal_button.setEnabled(can_switch and not busy)
-        self.refresh_button.setEnabled(not busy)
+        self.signal_selector.setEnabled(can_switch)
+        self.switch_signal_button.setEnabled(can_switch)
+        self.refresh_button.setEnabled(True)
+        self._update_revert_button(snapshot)
 
-        for button in self._monitor_buttons:
-            button.setEnabled(not busy)
-
-        if busy:
-            self.signal_status.setText("切换命令已发送，正在等待 5 秒校验；只有明确检测到未生效时才会自动切回。")
-        elif can_switch:
-            self.signal_status.setText("先点上方按键选择显示器，再选择目标信号。程序只会在明确检测到切换未生效时才自动切回。")
+        if can_switch:
+            if self.revert_signal_button.isEnabled():
+                self.signal_status.setText("当前不会自动切回。若需要恢复到上一个信号，请点击“手动切回”。")
+            else:
+                self.signal_status.setText("先点上方按键选择显示器，再选择目标信号。切换后若需要恢复，请手动切回。")
         elif snapshot.current_input_source_code is not None:
             self.signal_status.setText(snapshot.input_control_error or "已读取当前信号，但当前无法执行切换。")
         else:
             self.signal_status.setText(snapshot.input_control_error or "当前显示器未返回可用的 DDC/CI 输入源信息。")
+
+    def _update_revert_button(self, snapshot: MonitorSnapshot | None) -> None:
+        default_text = "手动切回"
+        if snapshot is None:
+            self.revert_signal_button.setEnabled(False)
+            self.revert_signal_button.setText(default_text)
+            return
+
+        context = self._last_switch_context
+        if context is None or context.get("identity") != snapshot.identity:
+            self.revert_signal_button.setEnabled(False)
+            self.revert_signal_button.setText(default_text)
+            return
+
+        revert_code = int(context["revert_code"])
+        revert_label = str(context["revert_label"])
+        self.revert_signal_button.setText(f"切回 {revert_label}")
+        can_revert = snapshot.input_switch_supported and snapshot.current_input_source_code != revert_code
+        self.revert_signal_button.setEnabled(can_revert)
 
     def _reset_signal_controls(self) -> None:
         self.details_button.setEnabled(False)
@@ -574,9 +613,9 @@ class MonitorInfoWindow(QMainWindow):
         self.signal_selector.setEnabled(False)
         self.switch_signal_button.setEnabled(False)
         self.refresh_button.setEnabled(True)
-        for button in self._monitor_buttons:
-            button.setEnabled(True)
-        self.signal_status.setText("切换后 5 秒会尽量校验；只有明确检测到切换未生效时才自动切回。")
+        self.revert_signal_button.setEnabled(False)
+        self.revert_signal_button.setText("手动切回")
+        self.signal_status.setText("切换后不会自动回退；如果需要恢复，请手动点击“手动切回”。")
 
     def render_empty_state(self) -> None:
         self._selected_identity = None
@@ -589,14 +628,16 @@ class MonitorInfoWindow(QMainWindow):
         dialog = MonitorDetailDialog(snapshot, self)
         dialog.exec()
 
-    def _confirm_signal_switch(self, snapshot: MonitorSnapshot, target_label: str) -> bool:
+    def _confirm_signal_switch(self, snapshot: MonitorSnapshot, target_label: str, revert_mode: bool = False) -> bool:
         dialog = QMessageBox(self)
         dialog.setWindowTitle("确认切换信号源")
         dialog.setIcon(QMessageBox.Icon.Warning)
+        action_text = "切回" if revert_mode else "切换"
+        helper_text = "这次不会自动回退，你可以再次手动切换。"
         dialog.setText(
             (
-                f"准备将 {snapshot.display_title} 切换到 {target_label}。\n\n"
-                "5 秒后会尽量检查切换结果；只有在明确检测到切换未生效时才会自动切回，避免正常切换被误判。\n\n"
+                f"准备将 {snapshot.display_title}{action_text}到 {target_label}。\n\n"
+                f"{helper_text}\n\n"
                 "是否继续？"
             )
         )
@@ -624,132 +665,58 @@ class MonitorInfoWindow(QMainWindow):
         if not self._confirm_signal_switch(snapshot, target_label):
             return
 
-        self._clear_pending_switch()
-        self.refresh_timer.stop()
-        self.switch_verify_timer.stop()
-        self.refresh_button.setEnabled(False)
-        self.signal_selector.setEnabled(False)
-        self.switch_signal_button.setEnabled(False)
-        for button in self._monitor_buttons:
-            button.setEnabled(False)
-
-        session, message = open_monitor_input_session(snapshot)
-        if session is None:
-            self.signal_status.setText(f"切换失败：{message}")
-            self.refresh_button.setEnabled(True)
-            self._update_signal_controls(snapshot)
-            self.statusBar().showMessage(message, 6000)
-            if not self.refresh_timer.isActive():
-                self.refresh_timer.start(AUTO_REFRESH_INTERVAL_MS)
-            return
-
-        success, message = set_monitor_input_session_source(session, target_code, snapshot.display_title)
+        original_code = snapshot.current_input_source_code
+        success, message = switch_monitor_input_source(snapshot, target_code)
+        self.statusBar().showMessage(message, 6000)
         if not success:
-            close_monitor_input_session(session)
             self.signal_status.setText(f"切换失败：{message}")
-            self.refresh_button.setEnabled(True)
-            self._update_signal_controls(snapshot)
-            self.statusBar().showMessage(message, 6000)
-            if not self.refresh_timer.isActive():
-                self.refresh_timer.start(AUTO_REFRESH_INTERVAL_MS)
             return
 
-        self._pending_switch = {
-            "identity": snapshot.identity,
-            "display_title": snapshot.display_title,
-            "original_code": snapshot.current_input_source_code,
-            "target_code": target_code,
-            "target_label": target_label,
-            "session": session,
-        }
-        self.signal_status.setText(
-            f"已发送切换命令到 {target_label}。5 秒后会校验；只有明确检测到未生效时才会自动切回。"
-        )
-        self.statusBar().showMessage(message, 5000)
-        self.switch_verify_timer.start(SWITCH_VERIFY_DELAY_MS)
+        if original_code is not None:
+            self._last_switch_context = {
+                "identity": snapshot.identity,
+                "display_title": snapshot.display_title,
+                "revert_code": original_code,
+                "revert_label": input_source_label(original_code),
+            }
+        else:
+            self._last_switch_context = None
 
-    def _verify_pending_switch(self) -> None:
-        pending = self._pending_switch
-        if pending is None:
-            self._restore_after_switch_flow()
-            return
-
-        self.refresh_monitors(force=True)
-        latest_snapshot = self._find_snapshot_by_identity(pending["identity"])
-        session = pending.get("session")
-        target_code = int(pending["target_code"])
-        original_code = pending["original_code"]
-        target_label = str(pending["target_label"])
-
-        current_code, current_error = read_monitor_input_source(session)
-        latest_code = latest_snapshot.current_input_source_code if latest_snapshot is not None else None
-        current_confirms_target = current_code == target_code
-        latest_confirms_target = latest_code == target_code
-        target_confirmed = current_confirms_target or latest_confirms_target
-
-        if target_confirmed:
-            self.signal_status.setText(f"已确认目标信号有效：{target_label}。")
-            self.statusBar().showMessage(f"切换成功：{pending['display_title']} -> {target_label}", 6000)
-            self._restore_after_switch_flow(schedule_refresh_ms=SWITCH_RECOVERY_REFRESH_DELAY_MS)
-            return
-
-        target_clearly_invalid = latest_snapshot is not None and (
-            (latest_code is not None and latest_code != target_code)
-            or (current_code is not None and current_code != target_code)
-        )
-
-        if not target_clearly_invalid:
+        if self._last_switch_context is not None:
             self.signal_status.setText(
-                f"5 秒后暂时无法明确确认 {target_label} 的状态，已保留当前切换结果，不自动切回。"
+                f"已切换到 {target_label}。如果需要恢复，请手动点击“切回 {self._last_switch_context['revert_label']}”。"
             )
-            self.statusBar().showMessage(
-                current_error or "未能明确确认目标信号状态，已保留当前切换结果",
-                7000,
-            )
-            self._restore_after_switch_flow(schedule_refresh_ms=SWITCH_RECOVERY_REFRESH_DELAY_MS)
-            return
-
-        if original_code is None:
-            self.signal_status.setText(f"已明确检测到 {target_label} 未生效，但原始信号未知，无法自动切回。")
-            self.statusBar().showMessage("已明确检测到目标信号无效，但自动切回不可用", 7000)
-            self._restore_after_switch_flow(schedule_refresh_ms=SWITCH_RECOVERY_REFRESH_DELAY_MS)
-            return
-
-        revert_label = input_source_label(int(original_code))
-        success, message = set_monitor_input_session_source(session, int(original_code), pending["display_title"])
-        if success:
-            self.signal_status.setText(f"已明确检测到目标信号未生效，已尝试自动切回 {revert_label}。")
-            self.statusBar().showMessage(f"目标信号未生效，已尝试切回 {revert_label}", 8000)
         else:
-            self.signal_status.setText(f"已明确检测到目标信号未生效，但自动切回失败：{message}")
-            self.statusBar().showMessage(f"自动切回失败：{message}", 8000)
-        self._restore_after_switch_flow(schedule_refresh_ms=SWITCH_RECOVERY_REFRESH_DELAY_MS)
+            self.signal_status.setText(f"已切换到 {target_label}。如果需要恢复，请手动重新选择信号。")
+        QTimer.singleShot(POST_SWITCH_REFRESH_DELAY_MS, lambda: self.refresh_monitors(force=True))
 
-    def _clear_pending_switch(self) -> None:
-        if self._pending_switch is None:
+    def revert_to_previous_signal(self) -> None:
+        snapshot = self._current_snapshot()
+        context = self._last_switch_context
+        if snapshot is None or context is None or context.get("identity") != snapshot.identity:
+            self.statusBar().showMessage("当前没有可手动切回的信号", 4000)
             return
-        session = self._pending_switch.get("session")
-        if session is not None:
-            close_monitor_input_session(session)
-        self._pending_switch = None
 
-    def _restore_after_switch_flow(self, schedule_refresh_ms: int | None = None) -> None:
-        self._clear_pending_switch()
-        if not self.refresh_timer.isActive():
-            self.refresh_timer.start(AUTO_REFRESH_INTERVAL_MS)
-        self.refresh_button.setEnabled(True)
-        current_snapshot = self._current_snapshot()
-        if current_snapshot is not None:
-            self._update_signal_controls(current_snapshot)
-        else:
-            self._reset_signal_controls()
-        if schedule_refresh_ms is not None:
-            QTimer.singleShot(schedule_refresh_ms, lambda: self.refresh_monitors(force=True))
+        revert_code = int(context["revert_code"])
+        revert_label = str(context["revert_label"])
+        if revert_code == snapshot.current_input_source_code:
+            self.statusBar().showMessage(f"{snapshot.display_title} 当前已经是 {revert_label}", 4000)
+            self._last_switch_context = None
+            self._update_revert_button(snapshot)
+            return
 
-    def closeEvent(self, event) -> None:
-        self.switch_verify_timer.stop()
-        self._clear_pending_switch()
-        super().closeEvent(event)
+        if not self._confirm_signal_switch(snapshot, revert_label, revert_mode=True):
+            return
+
+        success, message = switch_monitor_input_source(snapshot, revert_code)
+        self.statusBar().showMessage(message, 6000)
+        if not success:
+            self.signal_status.setText(f"手动切回失败：{message}")
+            return
+
+        self._last_switch_context = None
+        self.signal_status.setText(f"已手动切回 {revert_label}。")
+        QTimer.singleShot(POST_SWITCH_REFRESH_DELAY_MS, lambda: self.refresh_monitors(force=True))
 
 
 
@@ -767,6 +734,9 @@ def main(argv: list[str] | None = None) -> int:
 
     set_windows_app_id()
     app = ensure_application()
+    icon = load_app_icon()
+    if not icon.isNull():
+        app.setWindowIcon(icon)
 
     if args.json or args.json_path:
         snapshots = collect_monitor_snapshots(app)
