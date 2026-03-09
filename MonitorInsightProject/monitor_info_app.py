@@ -3,18 +3,17 @@
 import argparse
 import html
 
-from PyQt6.QtCore import QSize, QTimer, Qt
+from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -90,24 +89,6 @@ QLabel#statusLabel {
     color: #506273;
     font-size: 9.1pt;
 }
-QListWidget {
-    background: transparent;
-    border: none;
-    outline: none;
-    padding: 0;
-}
-QListWidget::item {
-    background: #f8fafc;
-    border: 1px solid #dfe6ee;
-    border-radius: 12px;
-    margin: 4px 0;
-    padding: 10px 12px;
-}
-QListWidget::item:selected {
-    background: #183447;
-    color: white;
-    border: 1px solid #183447;
-}
 QPushButton, QComboBox {
     background: #f8fafc;
     border: 1px solid #d7dfe7;
@@ -125,6 +106,23 @@ QPushButton#accentButton {
 }
 QPushButton#accentButton:hover {
     background: #244960;
+}
+QPushButton#monitorSelectButton {
+    background: #f8fafc;
+    border: 1px solid #dfe6ee;
+    border-radius: 12px;
+    color: #183447;
+    min-height: 54px;
+    padding: 10px 12px;
+    text-align: left;
+}
+QPushButton#monitorSelectButton:hover {
+    background: #edf3f8;
+}
+QPushButton#monitorSelectButton:checked {
+    background: #183447;
+    color: white;
+    border: 1px solid #183447;
 }
 QPushButton:disabled, QComboBox:disabled {
     color: #94a2af;
@@ -289,13 +287,15 @@ class MonitorInfoWindow(QMainWindow):
         self._signature: tuple = ()
         self._selected_identity: tuple | None = None
         self._pending_switch: dict | None = None
+        self._monitor_buttons: list[QPushButton] = []
         self._build_ui()
         self._connect_runtime_signals()
         self.refresh_monitors(force=True)
 
     def _build_ui(self) -> None:
         self.setWindowTitle(APP_NAME)
-        self.setFixedSize(520, 560)
+        self.resize(520, 560)
+        self.setMinimumSize(520, 560)
         self.setStyleSheet(STYLE_SHEET)
         self.setStatusBar(QStatusBar(self))
         self.setFont(QFont("Microsoft YaHei UI", 10))
@@ -336,16 +336,25 @@ class MonitorInfoWindow(QMainWindow):
         monitors_layout.setContentsMargins(14, 14, 14, 14)
         monitors_layout.setSpacing(8)
 
-        monitors_title = QLabel("当前检测到的显示器")
+        monitors_title = QLabel("按键选择显示器")
         monitors_title.setObjectName("sectionTitle")
         self.monitor_count_label = QLabel("0 台显示器")
         self.monitor_count_label.setObjectName("captionLabel")
-        self.monitor_list = QListWidget()
-        self.monitor_list.currentRowChanged.connect(self.render_selected_monitor)
+        self.monitor_empty_label = QLabel("当前没有检测到显示器")
+        self.monitor_empty_label.setObjectName("captionLabel")
+        self.monitor_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.monitor_button_group = QButtonGroup(self)
+        self.monitor_button_group.setExclusive(True)
+        self.monitor_button_container = QWidget()
+        self.monitor_button_layout = QVBoxLayout(self.monitor_button_container)
+        self.monitor_button_layout.setContentsMargins(0, 0, 0, 0)
+        self.monitor_button_layout.setSpacing(8)
 
         monitors_layout.addWidget(monitors_title)
         monitors_layout.addWidget(self.monitor_count_label)
-        monitors_layout.addWidget(self.monitor_list, 1)
+        monitors_layout.addWidget(self.monitor_empty_label)
+        monitors_layout.addWidget(self.monitor_button_container, 1)
         layout.addWidget(monitors_panel, 1)
 
         switch_panel = QFrame()
@@ -384,7 +393,7 @@ class MonitorInfoWindow(QMainWindow):
         action_row.addWidget(self.details_button)
         action_row.addStretch(1)
 
-        self.signal_status = QLabel("切换后 5 秒会自动校验，若发现目标信号无效会尝试切回原信号。")
+        self.signal_status = QLabel("切换后 5 秒会尽量校验；只有明确检测到切换未生效时才自动切回。")
         self.signal_status.setObjectName("statusLabel")
         self.signal_status.setWordWrap(True)
 
@@ -416,10 +425,12 @@ class MonitorInfoWindow(QMainWindow):
         self.switch_verify_timer.timeout.connect(self._verify_pending_switch)
 
     def _current_snapshot(self) -> MonitorSnapshot | None:
-        row = self.monitor_list.currentRow()
-        if row < 0 or row >= len(self.snapshots):
-            return None
-        return self.snapshots[row]
+        snapshot = self._find_snapshot_by_identity(self._selected_identity)
+        if snapshot is not None:
+            return snapshot
+        if self.snapshots:
+            return self.snapshots[0]
+        return None
 
     def _find_snapshot_by_identity(self, identity: tuple | None) -> MonitorSnapshot | None:
         if identity is None:
@@ -435,64 +446,90 @@ class MonitorInfoWindow(QMainWindow):
         if not force and signature == self._signature:
             return
 
-        current_item = self.monitor_list.currentItem()
-        if current_item is not None:
-            self._selected_identity = current_item.data(Qt.ItemDataRole.UserRole)
-
         self.snapshots = snapshots
         self._signature = signature
-        self._populate_monitor_list()
+        self._populate_monitor_buttons()
         count = len(self.snapshots)
         self.monitor_count_label.setText(f"{count} 台显示器")
         self.summary_label.setText(
-            f"当前识别到 {count} 台显示器。主页只保留切换功能，详细参数请点“显示器信息”。"
+            f"当前识别到 {count} 台显示器。点击按键选择显示器，窗口也支持放大和全屏。"
         )
         self.statusBar().showMessage("显示器信息已更新", 2200)
 
-    def _populate_monitor_list(self) -> None:
-        self.monitor_list.blockSignals(True)
-        self.monitor_list.clear()
+    def _clear_monitor_buttons(self) -> None:
+        while self.monitor_button_layout.count():
+            item = self.monitor_button_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                self.monitor_button_group.removeButton(widget)
+                widget.deleteLater()
+        self._monitor_buttons = []
+
+    def _populate_monitor_buttons(self) -> None:
+        self._clear_monitor_buttons()
+
+        if not self.snapshots:
+            self.monitor_empty_label.show()
+            self.monitor_button_container.hide()
+            self.render_empty_state()
+            return
+
+        self.monitor_empty_label.hide()
+        self.monitor_button_container.show()
+
+        target_identity = self._selected_identity
+        if self._find_snapshot_by_identity(target_identity) is None:
+            target_identity = self.snapshots[0].identity
 
         for snapshot in self.snapshots:
             top_line = snapshot.display_title
             if snapshot.is_primary:
                 top_line += "  ·  主显示器"
             signal_text = snapshot.current_input_source_label if snapshot.current_input_source_code is not None else "未读取"
-            bottom_line = (
-                f"{snapshot.desktop_resolution[0]} x {snapshot.desktop_resolution[1]}"
-                f"  ·  {signal_text}"
+            button = QPushButton(
+                f"{top_line}\n{snapshot.desktop_resolution[0]} x {snapshot.desktop_resolution[1]}  ·  {signal_text}"
             )
-            item = QListWidgetItem(f"{top_line}\n{bottom_line}")
-            item.setData(Qt.ItemDataRole.UserRole, snapshot.identity)
-            item.setSizeHint(QSize(0, 56))
-            self.monitor_list.addItem(item)
+            button.setObjectName("monitorSelectButton")
+            button.setCheckable(True)
+            button.clicked.connect(
+                lambda _checked=False, identity=snapshot.identity: self.select_monitor(identity)
+            )
+            self.monitor_button_group.addButton(button)
+            self.monitor_button_layout.addWidget(button)
+            self._monitor_buttons.append(button)
 
-        target_row = 0
-        if self._selected_identity is not None:
-            for row, snapshot in enumerate(self.snapshots):
-                if snapshot.identity == self._selected_identity:
-                    target_row = row
-                    break
+        self.monitor_button_layout.addStretch(1)
+        self._selected_identity = target_identity
+        self._sync_monitor_button_states()
+        self.render_selected_monitor(self._current_snapshot())
 
-        self.monitor_list.blockSignals(False)
-        if self.snapshots:
-            self.monitor_list.setCurrentRow(target_row)
-            self.render_selected_monitor(target_row)
-        else:
-            self.render_empty_state()
+    def _sync_monitor_button_states(self) -> None:
+        for button, snapshot in zip(self._monitor_buttons, self.snapshots):
+            button.blockSignals(True)
+            button.setChecked(snapshot.identity == self._selected_identity)
+            button.blockSignals(False)
 
-    def render_selected_monitor(self, row: int) -> None:
-        if row < 0 or row >= len(self.snapshots):
+    def select_monitor(self, identity: tuple) -> None:
+        if self._selected_identity == identity:
+            self._sync_monitor_button_states()
+            self.render_selected_monitor(self._current_snapshot())
+            return
+        self._selected_identity = identity
+        self._sync_monitor_button_states()
+        self.render_selected_monitor(self._current_snapshot())
+
+    def render_selected_monitor(self, snapshot: MonitorSnapshot | None) -> None:
+        if snapshot is None:
             self.render_empty_state()
             return
 
-        snapshot = self.snapshots[row]
         self._selected_identity = snapshot.identity
         self.selected_monitor_label.setText(snapshot.display_title)
         self.selected_monitor_summary.setText(
             f"{snapshot.manufacturer or '未知厂商'}  ·  {snapshot.refresh_rate_hz:.3f} Hz  ·  缩放 {snapshot.scale_percent}%"
         )
         self._update_signal_controls(snapshot)
+        self._sync_monitor_button_states()
 
     def _update_signal_controls(self, snapshot: MonitorSnapshot) -> None:
         self.details_button.setEnabled(True)
@@ -515,10 +552,13 @@ class MonitorInfoWindow(QMainWindow):
         self.switch_signal_button.setEnabled(can_switch and not busy)
         self.refresh_button.setEnabled(not busy)
 
+        for button in self._monitor_buttons:
+            button.setEnabled(not busy)
+
         if busy:
-            self.signal_status.setText("切换命令已发送，正在等待 5 秒校验；若检测到目标信号无效会自动切回。")
+            self.signal_status.setText("切换命令已发送，正在等待 5 秒校验；只有明确检测到未生效时才会自动切回。")
         elif can_switch:
-            self.signal_status.setText("选择目标信号后点击“切换”。如果切换后 5 秒检测到信号无效，会自动尝试切回。")
+            self.signal_status.setText("先点上方按键选择显示器，再选择目标信号。程序只会在明确检测到切换未生效时才自动切回。")
         elif snapshot.current_input_source_code is not None:
             self.signal_status.setText(snapshot.input_control_error or "已读取当前信号，但当前无法执行切换。")
         else:
@@ -534,7 +574,9 @@ class MonitorInfoWindow(QMainWindow):
         self.signal_selector.setEnabled(False)
         self.switch_signal_button.setEnabled(False)
         self.refresh_button.setEnabled(True)
-        self.signal_status.setText("切换后 5 秒会自动校验，若发现目标信号无效会尝试切回原信号。")
+        for button in self._monitor_buttons:
+            button.setEnabled(True)
+        self.signal_status.setText("切换后 5 秒会尽量校验；只有明确检测到切换未生效时才自动切回。")
 
     def render_empty_state(self) -> None:
         self._selected_identity = None
@@ -554,7 +596,7 @@ class MonitorInfoWindow(QMainWindow):
         dialog.setText(
             (
                 f"准备将 {snapshot.display_title} 切换到 {target_label}。\n\n"
-                "5 秒后会自动检查目标信号是否仍然能被当前电脑识别；若检测到无效，会尝试切回原信号。\n\n"
+                "5 秒后会尽量检查切换结果；只有在明确检测到切换未生效时才会自动切回，避免正常切换被误判。\n\n"
                 "是否继续？"
             )
         )
@@ -588,6 +630,8 @@ class MonitorInfoWindow(QMainWindow):
         self.refresh_button.setEnabled(False)
         self.signal_selector.setEnabled(False)
         self.switch_signal_button.setEnabled(False)
+        for button in self._monitor_buttons:
+            button.setEnabled(False)
 
         session, message = open_monitor_input_session(snapshot)
         if session is None:
@@ -619,7 +663,7 @@ class MonitorInfoWindow(QMainWindow):
             "session": session,
         }
         self.signal_status.setText(
-            f"已发送切换命令到 {target_label}。5 秒后会校验；若检测到目标信号无效，将尝试自动切回。"
+            f"已发送切换命令到 {target_label}。5 秒后会校验；只有明确检测到未生效时才会自动切回。"
         )
         self.statusBar().showMessage(message, 5000)
         self.switch_verify_timer.start(SWITCH_VERIFY_DELAY_MS)
@@ -639,8 +683,9 @@ class MonitorInfoWindow(QMainWindow):
 
         current_code, current_error = read_monitor_input_source(session)
         latest_code = latest_snapshot.current_input_source_code if latest_snapshot is not None else None
-        latest_visible = latest_snapshot is not None
-        target_confirmed = latest_visible and current_code == target_code and latest_code == target_code
+        current_confirms_target = current_code == target_code
+        latest_confirms_target = latest_code == target_code
+        target_confirmed = current_confirms_target or latest_confirms_target
 
         if target_confirmed:
             self.signal_status.setText(f"已确认目标信号有效：{target_label}。")
@@ -648,32 +693,36 @@ class MonitorInfoWindow(QMainWindow):
             self._restore_after_switch_flow(schedule_refresh_ms=SWITCH_RECOVERY_REFRESH_DELAY_MS)
             return
 
+        target_clearly_invalid = latest_snapshot is not None and (
+            (latest_code is not None and latest_code != target_code)
+            or (current_code is not None and current_code != target_code)
+        )
+
+        if not target_clearly_invalid:
+            self.signal_status.setText(
+                f"5 秒后暂时无法明确确认 {target_label} 的状态，已保留当前切换结果，不自动切回。"
+            )
+            self.statusBar().showMessage(
+                current_error or "未能明确确认目标信号状态，已保留当前切换结果",
+                7000,
+            )
+            self._restore_after_switch_flow(schedule_refresh_ms=SWITCH_RECOVERY_REFRESH_DELAY_MS)
+            return
+
         if original_code is None:
-            detail = current_error or "原始信号未知，无法自动切回。"
-            self.signal_status.setText(f"5 秒后检测到目标信号无效，但无法自动切回：{detail}")
-            self.statusBar().showMessage("目标信号无效，自动切回不可用", 7000)
+            self.signal_status.setText(f"已明确检测到 {target_label} 未生效，但原始信号未知，无法自动切回。")
+            self.statusBar().showMessage("已明确检测到目标信号无效，但自动切回不可用", 7000)
             self._restore_after_switch_flow(schedule_refresh_ms=SWITCH_RECOVERY_REFRESH_DELAY_MS)
             return
 
         revert_label = input_source_label(int(original_code))
         success, message = set_monitor_input_session_source(session, int(original_code), pending["display_title"])
         if success:
-            self.signal_status.setText(
-                f"5 秒后检测到目标信号无效，已尝试自动切回 {revert_label}。"
-            )
-            self.statusBar().showMessage(
-                f"目标信号无效，已尝试切回 {revert_label}",
-                8000,
-            )
+            self.signal_status.setText(f"已明确检测到目标信号未生效，已尝试自动切回 {revert_label}。")
+            self.statusBar().showMessage(f"目标信号未生效，已尝试切回 {revert_label}", 8000)
         else:
-            fallback_reason = current_error or "未能确认目标信号有效"
-            self.signal_status.setText(
-                f"检测到目标信号无效，自动切回失败：{message}"
-            )
-            self.statusBar().showMessage(
-                f"{fallback_reason}，自动切回失败：{message}",
-                8000,
-            )
+            self.signal_status.setText(f"已明确检测到目标信号未生效，但自动切回失败：{message}")
+            self.statusBar().showMessage(f"自动切回失败：{message}", 8000)
         self._restore_after_switch_flow(schedule_refresh_ms=SWITCH_RECOVERY_REFRESH_DELAY_MS)
 
     def _clear_pending_switch(self) -> None:
