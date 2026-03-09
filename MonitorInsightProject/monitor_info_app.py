@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QStatusBar,
     QTextBrowser,
     QVBoxLayout,
@@ -321,11 +322,12 @@ class MonitorInfoWindow(QMainWindow):
         if not icon.isNull():
             self.setWindowIcon(icon)
             self.app.setWindowIcon(icon)
-        self.resize(520, 560)
-        self.setMinimumSize(520, 560)
+        self.resize(520, 610)
+        self.setMinimumSize(520, 610)
         self.setStyleSheet(STYLE_SHEET)
         self.setStatusBar(QStatusBar(self))
         self.setFont(QFont("Microsoft YaHei UI", 10))
+        self.statusBar().setSizeGripEnabled(False)
 
         root = QWidget()
         layout = QVBoxLayout(root)
@@ -381,8 +383,8 @@ class MonitorInfoWindow(QMainWindow):
         monitors_layout.addWidget(monitors_title)
         monitors_layout.addWidget(self.monitor_count_label)
         monitors_layout.addWidget(self.monitor_empty_label)
-        monitors_layout.addWidget(self.monitor_button_container, 1)
-        layout.addWidget(monitors_panel, 1)
+        monitors_layout.addWidget(self.monitor_button_container)
+        layout.addWidget(monitors_panel)
 
         switch_panel = QFrame()
         switch_panel.setObjectName("card")
@@ -423,7 +425,7 @@ class MonitorInfoWindow(QMainWindow):
         action_row.addWidget(self.revert_signal_button)
         action_row.addStretch(1)
 
-        self.signal_status = QLabel("切换后不会自动回退；如果需要恢复，请手动点击“手动切回”。")
+        self.signal_status = QLabel("切换后不会自动回退；如需恢复请点击“手动切回”。")
         self.signal_status.setObjectName("statusLabel")
         self.signal_status.setWordWrap(True)
 
@@ -437,7 +439,13 @@ class MonitorInfoWindow(QMainWindow):
         switch_layout.addWidget(self.signal_status)
         layout.addWidget(switch_panel)
 
-        self.setCentralWidget(root)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(root)
+
+        self.setCentralWidget(scroll)
         self._reset_signal_controls()
 
     def _connect_runtime_signals(self) -> None:
@@ -477,9 +485,7 @@ class MonitorInfoWindow(QMainWindow):
         self._populate_monitor_buttons()
         count = len(self.snapshots)
         self.monitor_count_label.setText(f"{count} 台显示器")
-        self.summary_label.setText(
-            f"当前识别到 {count} 台显示器。点击按键选择显示器；切换信号后若需要恢复，请手动切回。"
-        )
+        self.summary_label.setText(f"当前识别到 {count} 台显示器。点击按键选择显示器。")
         self.statusBar().showMessage("显示器信息已更新", 2200)
 
     def _clear_monitor_buttons(self) -> None:
@@ -576,9 +582,9 @@ class MonitorInfoWindow(QMainWindow):
 
         if can_switch:
             if self.revert_signal_button.isEnabled():
-                self.signal_status.setText("当前不会自动切回。若需要恢复到上一个信号，请点击“手动切回”。")
+                self.signal_status.setText("当前不会自动切回。如需恢复到上一个信号，请点击“手动切回”。")
             else:
-                self.signal_status.setText("先点上方按键选择显示器，再选择目标信号。切换后若需要恢复，请手动切回。")
+                self.signal_status.setText("先点上方按键选择显示器，再选择目标信号。切换后如需恢复，请手动切回。")
         elif snapshot.current_input_source_code is not None:
             self.signal_status.setText(snapshot.input_control_error or "已读取当前信号，但当前无法执行切换。")
         else:
@@ -615,7 +621,7 @@ class MonitorInfoWindow(QMainWindow):
         self.refresh_button.setEnabled(True)
         self.revert_signal_button.setEnabled(False)
         self.revert_signal_button.setText("手动切回")
-        self.signal_status.setText("切换后不会自动回退；如果需要恢复，请手动点击“手动切回”。")
+        self.signal_status.setText("切换后不会自动回退；如需恢复请点击“手动切回”。")
 
     def render_empty_state(self) -> None:
         self._selected_identity = None
