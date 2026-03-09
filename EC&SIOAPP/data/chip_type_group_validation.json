@@ -1,0 +1,12 @@
+{
+  "type_labels": [
+    "EC芯片",
+    "SIO",
+    "CPU",
+    "PCIE转SATA"
+  ],
+  "initial_type": "CPU",
+  "cpu_chip_ids": [
+    "amd_family_19h_model_78h"
+  ]
+}

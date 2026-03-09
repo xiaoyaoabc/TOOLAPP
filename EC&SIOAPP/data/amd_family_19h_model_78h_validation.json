@@ -1,0 +1,13 @@
+{
+  "selected_chip": "amd_family_19h_model_78h",
+  "pin_count": 81,
+  "module_count": 12,
+  "signal_count": 270,
+  "selected_pin": true,
+  "selected_title": "AGPIO84",
+  "detail_contains_agpio84": true,
+  "detail_contains_fanin0": true,
+  "detail_contains_chinese_voltage": false,
+  "zoom": 0.75,
+  "screenshot_created": true
+}

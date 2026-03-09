@@ -1,0 +1,19 @@
+{
+  "chip_count": 12,
+  "dialog_chip_count": 1,
+  "selected_chip": "cw2217baad",
+  "view_type": "package_top",
+  "pin_count": 12,
+  "module_count": 3,
+  "signal_count": 10,
+  "menu_has_chip_option": true,
+  "gpio_selected": true,
+  "detail_pin_selected": true,
+  "detail_has_1_8v": true,
+  "detail_has_3_3v": true,
+  "detail_has_rxec": false,
+  "detail_has_chinese": true,
+  "highlight_count": 1,
+  "zoom": 0.65,
+  "screenshot_created": true
+}

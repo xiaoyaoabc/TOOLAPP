@@ -1,0 +1,19 @@
+{
+  "chip_count": 8,
+  "dialog_chip_count": 8,
+  "selected_chip": "it8772_f",
+  "view_type": "package_top",
+  "pin_count": 64,
+  "module_count": 10,
+  "signal_count": 115,
+  "menu_has_chip_option": true,
+  "gpio_selected": true,
+  "detail_pin_selected": true,
+  "detail_has_1_8v": true,
+  "detail_has_3_3v": true,
+  "detail_has_rxec": false,
+  "detail_has_chinese": true,
+  "highlight_count": 1,
+  "zoom": 0.65,
+  "screenshot_created": true
+}

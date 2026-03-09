@@ -1,0 +1,12 @@
+{
+  "selected_chip": "it8613_e",
+  "display_name": "IT8613E / IT8613EX",
+  "pin_count": 64,
+  "selection_title": "P63",
+  "detail_has_cts1": true,
+  "detail_has_5v": true,
+  "detail_has_gpio": false,
+  "detail_has_3_3v": true,
+  "screenshot": "C:\\Users\\xyabc\\Desktop\\pdfAPP\\EC&SIOAPP\\data\\it8613_validation.png",
+  "screenshot_exists": true
+}

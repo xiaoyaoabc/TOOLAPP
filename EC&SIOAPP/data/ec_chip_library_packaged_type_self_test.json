@@ -1,0 +1,19 @@
+{
+  "chip_count": 8,
+  "dialog_chip_count": 1,
+  "selected_chip": "amd_family_19h_model_78h",
+  "view_type": "functional_package",
+  "pin_count": 81,
+  "module_count": 12,
+  "signal_count": 270,
+  "menu_has_chip_option": true,
+  "gpio_selected": true,
+  "detail_pin_selected": true,
+  "detail_has_1_8v": true,
+  "detail_has_3_3v": true,
+  "detail_has_rxec": false,
+  "detail_has_chinese": true,
+  "highlight_count": 1,
+  "zoom": 0.65,
+  "screenshot_created": true
+}

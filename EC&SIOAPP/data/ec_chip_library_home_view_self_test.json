@@ -1,0 +1,17 @@
+{
+  "chip_count": 1,
+  "dialog_chip_count": 1,
+  "selected_chip": "it5570_c",
+  "pin_count": 128,
+  "module_count": 18,
+  "signal_count": 263,
+  "menu_has_chip_option": true,
+  "gpio_selected": true,
+  "detail_pin_selected": true,
+  "detail_has_1_8v": true,
+  "detail_has_3_3v": true,
+  "detail_has_chinese": true,
+  "highlight_count": 1,
+  "zoom": 0.65,
+  "screenshot_created": true
+}

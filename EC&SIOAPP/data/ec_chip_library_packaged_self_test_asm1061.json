@@ -1,0 +1,19 @@
+{
+  "chip_count": 4,
+  "dialog_chip_count": 4,
+  "selected_chip": "asm1061",
+  "view_type": "document_only",
+  "pin_count": 0,
+  "module_count": 0,
+  "signal_count": 0,
+  "menu_has_chip_option": true,
+  "gpio_selected": false,
+  "detail_pin_selected": false,
+  "detail_has_1_8v": false,
+  "detail_has_3_3v": false,
+  "detail_has_rxec": true,
+  "detail_has_chinese": true,
+  "highlight_count": 0,
+  "zoom": 0.65,
+  "screenshot_created": true
+}

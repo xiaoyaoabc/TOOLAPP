@@ -1,0 +1,13 @@
+{
+  "chip_loaded": "asm1061",
+  "view_type": "document_only",
+  "programming_items": 13,
+  "sections": 13,
+  "stats_text": "13 Items · 13 Sections · Programming Note",
+  "canvas_title": "芯片资料卡",
+  "detail_has_rxec": true,
+  "detail_has_subclass_title": true,
+  "detail_has_ahci_value": true,
+  "detail_has_programming_note": true,
+  "screenshot_created": true
+}

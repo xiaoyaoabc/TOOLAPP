@@ -1,0 +1,43 @@
+{
+  "app": "Monitor Insight",
+  "monitor_count": 1,
+  "computer_name": "XY",
+  "monitors": [
+    {
+      "index": 1,
+      "name": "ROG XG27AQ",
+      "manufacturer": "ASUSTek COMPUTER INC",
+      "model": "ROG XG27AQ",
+      "serial_number": "R4LMQS031524",
+      "is_primary": true,
+      "desktop_resolution": {
+        "width": 2048,
+        "height": 1152
+      },
+      "estimated_native_resolution": {
+        "width": 2560,
+        "height": 1440
+      },
+      "work_area_resolution": {
+        "width": 2048,
+        "height": 1104
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "refresh_rate_hz": 59.951,
+      "scale_factor": 1.25,
+      "scale_percent": 125,
+      "logical_dpi": 96.0,
+      "physical_dpi": 87.18,
+      "physical_size_mm": {
+        "width": 596.0,
+        "height": 336.0
+      },
+      "diagonal_inches": 26.94,
+      "color_depth": 32,
+      "orientation": "横向"
+    }
+  ]
+}

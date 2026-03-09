@@ -1,0 +1,10 @@
+{
+  "dialog_visible_count_after_delete": 3,
+  "dialog_hidden_count_after_delete": 1,
+  "delete_button_text": "删除选中",
+  "restore_button_text": "恢复全部",
+  "window_visible_chip_count": 3,
+  "asm1061_hidden_from_window": true,
+  "before_screenshot_created": true,
+  "after_delete_screenshot_created": true
+}
